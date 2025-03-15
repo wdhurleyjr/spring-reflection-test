@@ -1,0 +1,43 @@
+Business Source License 1.1 (BSL 1.1)
+
+LICENSE GRANT:
+The use of this software is permitted only under the following conditions.
+
+USAGE:
+- You may use this software only for non-commercial and evaluation purposes.
+- If you wish to use it for commercial purposes, you must obtain a commercial license from William Hurley.
+
+CHANGE DATE:
+- Effective Date: 2025-03-15
+- On this date, this software will automatically transition to the following open-source license:
+  Apache License 2.0.
+
+CHANGE LICENSE:
+- After the Change Date, this software will be licensed under:
+  Apache License 2.0 (https://www.apache.org/licenses/LICENSE-2.0).
+
+ADDITIONAL USE GRANTS:
+- If you have received written permission from William Hurley, additional rights may be granted.
+
+LIMITATIONS:
+1. No sublicensing or redistribution unless explicitly permitted.
+2. No modifications or derivative works can be distributed under this license.
+3. The software is provided "as-is" without warranty of any kind.
+4. Liability disclaimers apply; the author is not responsible for damages.
+
+COMMERCIAL LICENSING:
+For commercial licensing or inquiries, contact:  
+Email: wdhurleyjr@gmail.com
+
+FUTURE OPEN-SOURCE LICENSE: Apache 2.0
+Once the Change Date arrives, this software will be released under the Apache License 2.0, which allows:
+- Free use and modification for both commercial and non-commercial purposes.
+- Patent protection to prevent lawsuits over innovations included in the software.
+- Attribution requirement, ensuring your original work is acknowledged.
+
+For details, see:  
+Apache 2.0 License: https://www.apache.org/licenses/LICENSE-2.0
+
+FULL LICENSE REFERENCE:
+This license follows the Business Source License 1.1 model:  
+BSL 1.1 Official Reference: https://mariadb.com/bsl11/
