@@ -22,7 +22,11 @@ public class TestRunner {
     private static final String NULL_PLACEHOLDER = "__NULL__";
 
     public static void main(String[] args) throws Exception {
-        Reflections reflections = new Reflections("com.reflectiontest.springReflectionTest.examples");
+        // Automatically detect the base package
+        String basePackage = detectBasePackage();
+        System.out.println("🔍 Scanning package: " + basePackage);
+
+        Reflections reflections = new Reflections(basePackage);
 
         for (Class<?> clazz : reflections.getTypesAnnotatedWith(Service.class)) {
             Object serviceInstance = clazz.getDeclaredConstructor().newInstance();
@@ -52,12 +56,9 @@ public class TestRunner {
         }
     }
 
-    public static Object getMock(Class<?> clazz) {
-        return mockInstances.get(clazz);
-    }
-
     private static void runTest(Object serviceInstance, Method method, String inputJson, String expectedJson) {
         try {
+            // Reset mocks before each test to ensure independent executions
             for (Object mock : mockInstances.values()) {
                 Mockito.reset(mock);
             }
@@ -108,8 +109,12 @@ public class TestRunner {
                 }
             } catch (InvocationTargetException e) {
                 Throwable cause = e.getTargetException();
+                long endTime = System.nanoTime();
+                long duration = TimeUnit.NANOSECONDS.toMillis(endTime - startTime);
+
                 if (expectsException) {
-                    System.out.println("✅ PASSED: " + method.getName() + "(" + inputJson + ") -> Exception: " + cause.getClass().getSimpleName());
+                    System.out.println("✅ PASSED: " + method.getName() + "(" + inputJson + ") -> Exception: " + cause.getClass().getSimpleName() +
+                            " [Execution Time: " + duration + " ms]");
                 } else {
                     System.err.println("❌ ERROR: " + method.getName() + " with input: " + inputJson);
                     System.err.println("   - Unexpected Exception: " + cause.getClass().getSimpleName() + " - " + cause.getMessage());
@@ -123,6 +128,19 @@ public class TestRunner {
         }
     }
 
+    // Automatically detects the base package by checking the stack trace
+    private static String detectBasePackage() {
+        StackTraceElement[] stackTrace = Thread.currentThread().getStackTrace();
+        for (StackTraceElement element : stackTrace) {
+            if (element.getClassName().startsWith("com.")) { // Adjust based on your org structure
+                String className = element.getClassName();
+                int lastDotIndex = className.lastIndexOf('.');
+                return lastDotIndex > 0 ? className.substring(0, lastDotIndex) : className;
+            }
+        }
+        return "com"; // Default to scanning all `com.` packages
+    }
+
     // Parses JSON input and replaces "__NULL__" with `null` if needed
     private static Object parseInput(String json, Class<?> targetType) throws JsonProcessingException {
         if (json == null || json.equals(NULL_PLACEHOLDER)) {
@@ -131,6 +149,7 @@ public class TestRunner {
         return objectMapper.readValue(json, targetType);
     }
 }
+
 
 
 
