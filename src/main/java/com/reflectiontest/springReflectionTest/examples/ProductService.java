@@ -1,6 +1,7 @@
 package com.reflectiontest.springReflectionTest.examples;
 
 import com.reflectiontest.springReflectionTest.annotations.ExpectedResult;
+import com.reflectiontest.springReflectionTest.annotations.IntegrationTest;
 import com.reflectiontest.springReflectionTest.annotations.MockDependency;
 import com.reflectiontest.springReflectionTest.repositories.ExternalProductRepository;
 import org.springframework.stereotype.Service;
@@ -27,6 +28,7 @@ public class ProductService {
         }
     }
 
+    @IntegrationTest
     @ExpectedResult(inputJson = "{\"name\": \"Laptop\", \"price\": 1200.00}", expectedJson = "{\"name\": \"Laptop\", \"price\": 1200.00}")
     @ExpectedResult(inputJson = "{\"name\": \"Mouse\", \"price\": 25.00}", expectedJson = "{\"name\": \"Mouse\", \"price\": 25.00}")
     @ExpectedResult(inputJson = "__NULL__", expectedJson = "__NULL__")
@@ -43,6 +45,7 @@ public class ProductService {
         return productCache.get(product.getName());
     }
 
+    @IntegrationTest
     @ExpectedResult(inputJson = "{\"name\": \"Keyboard\", \"price\": 50.00}", expectedJson = "false")
     @ExpectedResult(inputJson = "{\"name\": \"Monitor\", \"price\": 300.00}", expectedJson = "false")
     @ExpectedResult(inputJson = "{\"name\": \"Mouse\", \"price\": 25.00}", expectedJson = "true")
@@ -51,6 +54,7 @@ public class ProductService {
         return product != null && (productCache.containsKey(product.getName()) || productRepository.existsByName(product.getName()));
     }
 
+    @IntegrationTest
     @ExpectedResult(inputJson = "{\"name\": \"Headphones\", \"price\": 150.00}", expectedJson = "true")
     @ExpectedResult(inputJson = "{\"name\": \"Webcam\", \"price\": 75.00}", expectedJson = "true")
     @ExpectedResult(inputJson = "__NULL__", expectedJson = "false")
@@ -59,6 +63,7 @@ public class ProductService {
         return product != null && (productCache.containsKey(product.getName()) || productRepository.existsByName(product.getName()));
     }
 
+    @IntegrationTest
     @ExpectedResult(inputJson = "{\"name\": \"Tablet\", \"price\": 300.00}", expectedJson = "true")
     @ExpectedResult(inputJson = "{\"name\": \"Smartphone\", \"price\": 800.00}", expectedJson = "true")
     public boolean addProductTwiceAndCheck(Product product) {
@@ -67,6 +72,7 @@ public class ProductService {
         return productCache.containsKey(product.getName());
     }
 
+    // These methods do not require integration testing since they perform standalone logic
     @ExpectedResult(inputJson = "[5, 3]", expectedJson = "8")
     @ExpectedResult(inputJson = "[-2, 7]", expectedJson = "5")
     @ExpectedResult(inputJson = "[0, 0]", expectedJson = "0")
