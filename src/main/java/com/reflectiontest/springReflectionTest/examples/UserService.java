@@ -1,6 +1,7 @@
 package com.reflectiontest.springReflectionTest.examples;
 
 import com.reflectiontest.springReflectionTest.annotations.ExpectedResult;
+import com.reflectiontest.springReflectionTest.annotations.IntegrationTest;
 import com.reflectiontest.springReflectionTest.annotations.MockDependency;
 import com.reflectiontest.springReflectionTest.repositories.UserRepository;
 import org.springframework.stereotype.Service;
@@ -17,7 +18,7 @@ public class UserService {
 
     private final Map<String, User> userCache = new HashMap<>();
 
-    // Register a new user
+    @IntegrationTest
     @ExpectedResult(inputJson = "{\"username\": \"johndoe\", \"password\": \"password123\"}", expectedJson = "true")
     @ExpectedResult(inputJson = "{\"username\": \"\", \"password\": \"password123\"}", expectedJson = "false")
     @ExpectedResult(inputJson = "{\"username\": \"johndoe\", \"password\": \"\"}", expectedJson = "false")
@@ -26,13 +27,13 @@ public class UserService {
             return false;
         }
         if (userRepository.existsByUsername(user.getUsername())) {
-            return false; // User already exists
+            return false;
         }
         userCache.put(user.getUsername(), user);
         return true;
     }
 
-    // Authenticate user credentials
+    @IntegrationTest
     @ExpectedResult(inputJson = "{\"username\": \"johndoe\", \"password\": \"password123\"}", expectedJson = "true")
     @ExpectedResult(inputJson = "{\"username\": \"johndoe\", \"password\": \"wrongpassword\"}", expectedJson = "false")
     @ExpectedResult(inputJson = "{\"username\": \"doesnotexist\", \"password\": \"password123\"}", expectedJson = "false")
@@ -43,7 +44,7 @@ public class UserService {
         return userCache.get(user.getUsername()).getPassword().equals(user.getPassword());
     }
 
-    // Change user password
+    @IntegrationTest
     @ExpectedResult(inputJson = "[\"johndoe\", \"password123\", \"newpassword456\"]", expectedJson = "true")
     @ExpectedResult(inputJson = "[\"johndoe\", \"wrongpassword\", \"newpassword456\"]", expectedJson = "false")
     @ExpectedResult(inputJson = "[\"doesnotexist\", \"password123\", \"newpassword456\"]", expectedJson = "false")
@@ -59,14 +60,13 @@ public class UserService {
         return true;
     }
 
-    // Check if a user exists
+    @IntegrationTest
     @ExpectedResult(inputJson = "\"johndoe\"", expectedJson = "true")
     @ExpectedResult(inputJson = "\"doesnotexist\"", expectedJson = "false")
     public boolean isUserRegistered(String username) {
         return userCache.containsKey(username);
     }
 
-    // Validate password strength (at least 8 characters, one digit, one special character)
     @ExpectedResult(inputJson = "\"StrongPass1!\"", expectedJson = "true")
     @ExpectedResult(inputJson = "\"weakpass\"", expectedJson = "false")
     @ExpectedResult(inputJson = "\"12345678\"", expectedJson = "false")
@@ -75,8 +75,3 @@ public class UserService {
         return password.matches("^(?=.*[0-9])(?=.*[!@#$%^&*]).{8,}$");
     }
 }
-
-
-
-
-
