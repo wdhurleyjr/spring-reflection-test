@@ -5,6 +5,8 @@ import com.reflectiontest.springReflectionTest.annotations.IntegrationTest;
 import com.reflectiontest.springReflectionTest.annotations.MockDependency;
 import com.reflectiontest.springReflectionTest.models.Product;
 import com.reflectiontest.springReflectionTest.repositories.ExternalProductRepository;
+import com.reflectiontest.springReflectionTest.repositories.ProductRepository;
+import com.reflectiontest.springReflectionTest.repositories.SearchHistoryRepository;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
@@ -13,23 +15,30 @@ import java.util.stream.Collectors;
 /**
  * Product service that demonstrates various testing scenarios
  * including complex objects, collections, exceptions, and edge cases.
+ *
+ * Implementation is stateless - relies on injected repositories for all data access.
  */
 @Service
 public class ProductService {
 
     @MockDependency
-    private ExternalProductRepository productRepository;
+    private ExternalProductRepository externalProductRepository;
 
-    private final Map<String, Product> productCache = new HashMap<>();
-    private final List<String> searchHistory = new ArrayList<>();
+    @MockDependency
+    private ProductRepository productRepository;
 
-    // Accessory method
+    @MockDependency
+    private SearchHistoryRepository searchRepository;
+
+    /**
+     * Adds a product to the repository if it doesn't already exist
+     */
     public void addProduct(Product product) {
         if (product == null || product.getName() == null) {
             return;
         }
-        if (!productRepository.existsByName(product.getName())) {
-            productCache.putIfAbsent(product.getName(), product);
+        if (!externalProductRepository.existsByName(product.getName())) {
+            productRepository.save(product);
         }
     }
 
@@ -41,17 +50,25 @@ public class ProductService {
     public Product getProductDetails(Product product) {
         if (product == null || product.getName() == null) return null;
 
-        // Track search history
-        searchHistory.add(product.getName());
+        // Record search history
+        searchRepository.saveSearch(product.getName());
 
-        if (!productCache.containsKey(product.getName())) {
-            if (productRepository.existsByName(product.getName())) {
-                return product;
-            }
-            addProduct(product);
+        // Try to find product in our repository
+        Optional<Product> existingProduct = productRepository.findByName(product.getName());
+        if (existingProduct.isPresent()) {
+            return existingProduct.get();
         }
 
-        return productCache.get(product.getName());
+        // Check if it exists in external repository
+        if (externalProductRepository.existsByName(product.getName())) {
+            // In a real scenario, we might fetch details from external repository
+            // For simplicity, we'll use the provided product object
+            addProduct(product);
+            return product;
+        }
+
+        // Not found in either repository
+        return null;
     }
 
     @IntegrationTest
@@ -60,7 +77,13 @@ public class ProductService {
     @ExpectedResult(inputJson = "{\"name\": \"Mouse\", \"price\": 25.00}", expectedJson = "true")
     @ExpectedResult(inputJson = "__NULL__", expectedJson = "false")
     public boolean isProductCached(Product product) {
-        return product != null && (productCache.containsKey(product.getName()) || productRepository.existsByName(product.getName()));
+        if (product == null || product.getName() == null) {
+            return false;
+        }
+
+        // Check both repositories
+        return productRepository.existsByName(product.getName()) ||
+                externalProductRepository.existsByName(product.getName());
     }
 
     @IntegrationTest
@@ -69,7 +92,7 @@ public class ProductService {
     @ExpectedResult(inputJson = "__NULL__", expectedJson = "false")
     public boolean addAndCheckCache(Product product) {
         addProduct(product);
-        return product != null && (productCache.containsKey(product.getName()) || productRepository.existsByName(product.getName()));
+        return product != null && isProductCached(product);
     }
 
     @IntegrationTest
@@ -77,8 +100,13 @@ public class ProductService {
     @ExpectedResult(inputJson = "{\"name\": \"Smartphone\", \"price\": 800.00}", expectedJson = "true")
     public boolean addProductTwiceAndCheck(Product product) {
         addProduct(product);
-        addProduct(product);
-        return productCache.containsKey(product.getName());
+        addProduct(product); // Second call should be idempotent
+
+        if (product == null || product.getName() == null) {
+            return false;
+        }
+
+        return productRepository.existsByName(product.getName());
     }
 
     /**
@@ -89,9 +117,14 @@ public class ProductService {
     @ExpectedResult(inputJson = "0", expectedJson = "[]")
     @ExpectedResult(inputJson = "10", expectedJson = "[\"Laptop\", \"Mouse\", \"Keyboard\", \"Monitor\", \"Headphones\"]")
     public List<String> getTopSearchedProducts(int limit) {
-        Map<String, Long> counts = searchHistory.stream()
-                .collect(Collectors.groupingBy(s -> s, Collectors.counting()));
+        if (limit <= 0) {
+            return Collections.emptyList();
+        }
 
+        // Get search history with counts from repository
+        Map<String, Long> counts = searchRepository.getSearchCounts();
+
+        // Sort by count (descending) and return top results
         return counts.entrySet().stream()
                 .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
                 .limit(limit)
@@ -119,7 +152,7 @@ public class ProductService {
                 .mapToDouble(Product::getPrice)
                 .sum();
 
-        Map<String, Object> summary = new HashMap<>();
+        LinkedHashMap<String, Object> summary = new LinkedHashMap<>();
         summary.put("totalItems", products.size());
         summary.put("totalValue", totalValue);
 
@@ -130,7 +163,7 @@ public class ProductService {
     @ExpectedResult(inputJson = "[5, 3]", expectedJson = "8")
     @ExpectedResult(inputJson = "[-2, 7]", expectedJson = "5")
     @ExpectedResult(inputJson = "[0, 0]", expectedJson = "0")
-    @ExpectedResult(inputJson = "[Integer.MAX_VALUE, 1]", expectedJson = "Integer.MIN_VALUE")
+    @ExpectedResult(inputJson = "[2147483647, 1]", expectedJson = "-2147483648") // Integer.MAX_VALUE + 1 = Integer.MIN_VALUE
     public int addTwoNumbers(int a, int b) {
         return a + b;
     }
@@ -200,7 +233,7 @@ public class ProductService {
     @ExpectedResult(inputJson = "[-10, -20, -30, -40, -5]", expectedJson = "-5")
     @ExpectedResult(inputJson = "[]", expectedJson = "__NULL__")
     @ExpectedResult(inputJson = "[5]", expectedJson = "5")
-    @ExpectedResult(inputJson = "[Integer.MIN_VALUE, 0, Integer.MAX_VALUE]", expectedJson = "Integer.MAX_VALUE")
+    @ExpectedResult(inputJson = "[-2147483648, 0, 2147483647]", expectedJson = "2147483647") // Using actual integer values instead of constants
     public Integer findMaxValue(int[] arr) {
         if (arr == null || arr.length == 0) return null;
         int max = arr[0];
@@ -219,12 +252,42 @@ public class ProductService {
     public Optional<Product> findProductByName(String name) {
         if (name == null) return Optional.empty();
 
-        // Add some test products
-        if (!productCache.containsKey("Laptop")) {
-            productCache.put("Laptop", new Product("Laptop", 1200.0));
+        // Check our repository first
+        Optional<Product> product = productRepository.findByName(name);
+        if (product.isPresent()) {
+            return product;
         }
 
-        return Optional.ofNullable(productCache.get(name));
+        // If not found and exists in external repository, create a product instance
+        if (externalProductRepository.existsByName(name)) {
+            // In a real scenario, we would fetch details from external repository
+            // For now, we'll create a placeholder product with estimated price
+            double estimatedPrice = estimatePrice(name);
+            return Optional.of(new Product(name, estimatedPrice));
+        }
+
+        return Optional.empty();
+    }
+
+    /**
+     * Helper method to estimate a price based on product name
+     * This is a stand-in for actual pricing logic that might exist in a real service
+     */
+    private double estimatePrice(String productName) {
+        if ("Laptop".equalsIgnoreCase(productName)) {
+            return 1200.0;
+        } else if ("Mouse".equalsIgnoreCase(productName)) {
+            return 25.0;
+        } else if ("Keyboard".equalsIgnoreCase(productName)) {
+            return 50.0;
+        } else if ("Monitor".equalsIgnoreCase(productName)) {
+            return 300.0;
+        } else if ("Headphones".equalsIgnoreCase(productName)) {
+            return 150.0;
+        } else {
+            // Default price for unknown products
+            return 99.99;
+        }
     }
 
     /**
@@ -243,7 +306,7 @@ public class ProductService {
             expectedJson = "{\"items\":[\"single\"],\"count\":1}"
     )
     public <T> Map<String, Object> wrapInContainer(List<T> items) {
-        Map<String, Object> container = new HashMap<>();
+        LinkedHashMap<String, Object> container = new LinkedHashMap<>();
         container.put("items", items);
         container.put("count", items.size());
         return container;

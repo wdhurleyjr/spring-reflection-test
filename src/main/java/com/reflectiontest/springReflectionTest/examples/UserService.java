@@ -4,16 +4,19 @@ import com.reflectiontest.springReflectionTest.annotations.ExpectedResult;
 import com.reflectiontest.springReflectionTest.annotations.IntegrationTest;
 import com.reflectiontest.springReflectionTest.annotations.MockDependency;
 import com.reflectiontest.springReflectionTest.models.User;
+import com.reflectiontest.springReflectionTest.repositories.AuthenticationRepository;
+import com.reflectiontest.springReflectionTest.repositories.TokenRepository;
 import com.reflectiontest.springReflectionTest.repositories.UserRepository;
 import org.springframework.stereotype.Service;
 
-import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
 
 /**
  * User service that demonstrates various testing scenarios
  * including complex objects, collections, exceptions, and security patterns.
+ *
+ * Implementation is stateless - relies on injected repositories for all data access.
  */
 @Service
 public class UserService {
@@ -21,36 +24,11 @@ public class UserService {
     @MockDependency
     private UserRepository userRepository;
 
-    private final Map<String, User> userCache = new HashMap<>();
-    private final Map<String, List<LoginAttempt>> loginAttempts = new HashMap<>();
-    private final Map<String, String> passwordResetTokens = new HashMap<>();
+    @MockDependency
+    private AuthenticationRepository authRepository;
 
-    /**
-     * Helper class for tracking login attempts
-     */
-    private static class LoginAttempt {
-        private final LocalDateTime timestamp;
-        private final boolean successful;
-        private final String ipAddress;
-
-        public LoginAttempt(boolean successful, String ipAddress) {
-            this.timestamp = LocalDateTime.now();
-            this.successful = successful;
-            this.ipAddress = ipAddress;
-        }
-
-        public LocalDateTime getTimestamp() {
-            return timestamp;
-        }
-
-        public boolean isSuccessful() {
-            return successful;
-        }
-
-        public String getIpAddress() {
-            return ipAddress;
-        }
-    }
+    @MockDependency
+    private TokenRepository tokenRepository;
 
     @IntegrationTest
     @ExpectedResult(inputJson = "{\"username\": \"johndoe\", \"password\": \"password123\"}", expectedJson = "true")
@@ -59,7 +37,8 @@ public class UserService {
     @ExpectedResult(inputJson = "{\"username\": \"admin\", \"password\": \"admin\"}", expectedJson = "false")
     @ExpectedResult(inputJson = "{\"username\": null, \"password\": \"password123\"}", expectedJson = "false")
     public boolean registerUser(User user) {
-        if (user == null || user.getUsername() == null || user.getUsername().isEmpty() || user.getPassword() == null || user.getPassword().isEmpty()) {
+        if (user == null || user.getUsername() == null || user.getUsername().isEmpty() ||
+                user.getPassword() == null || user.getPassword().isEmpty()) {
             return false;
         }
 
@@ -68,11 +47,12 @@ public class UserService {
             return false;
         }
 
-        if (userRepository.existsByUsername(user.getUsername()) || userCache.containsKey(user.getUsername())) {
+        if (userRepository.existsByUsername(user.getUsername())) {
             return false;
         }
 
-        userCache.put(user.getUsername(), user);
+        // Save user to repository
+        userRepository.save(user);
         return true;
     }
 
@@ -82,70 +62,37 @@ public class UserService {
     @ExpectedResult(inputJson = "[{\"username\": \"doesnotexist\", \"password\": \"password123\"}, \"192.168.1.1\"]", expectedJson = "{\"success\": false, \"message\": \"Invalid username or password\"}")
     @ExpectedResult(inputJson = "[{\"username\": \"lockedUser\", \"password\": \"password123\"}, \"192.168.1.1\"]", expectedJson = "{\"success\": false, \"message\": \"Account is locked due to too many failed attempts\"}")
     public Map<String, Object> authenticateUser(User user, String ipAddress) {
-        Map<String, Object> result = new HashMap<>();
+        LinkedHashMap<String, Object> result = new LinkedHashMap<>();
+
+        // Check for null values
+        if (user == null || user.getUsername() == null) {
+            result.put("success", false);
+            result.put("message", "Invalid username or password");
+            return result;
+        }
 
         // Check if user is locked out
-        if (user != null && isUserLocked(user.getUsername())) {
+        if (authRepository.isAccountLocked(user.getUsername())) {
             result.put("success", false);
             result.put("message", "Account is locked due to too many failed attempts");
             return result;
         }
 
-        // Basic authentication
-        boolean authenticated = user != null &&
-                userCache.containsKey(user.getUsername()) &&
-                userCache.get(user.getUsername()).getPassword().equals(user.getPassword());
+        // Get user from repository
+        Optional<User> storedUser = userRepository.findByUsername(user.getUsername());
 
-        // Track login attempt
-        recordLoginAttempt(user != null ? user.getUsername() : "unknown", authenticated, ipAddress);
+        // Verify credentials
+        boolean authenticated = storedUser.isPresent() &&
+                user.getPassword() != null &&
+                user.getPassword().equals(storedUser.get().getPassword());
+
+        // Track login attempt - this updates the lock status if needed
+        authRepository.recordLoginAttempt(user.getUsername(), authenticated, ipAddress);
 
         result.put("success", authenticated);
         result.put("message", authenticated ? "Login successful" : "Invalid username or password");
 
         return result;
-    }
-
-    /**
-     * Check if a user is locked out due to too many failed attempts
-     */
-    private boolean isUserLocked(String username) {
-        if (!loginAttempts.containsKey(username)) {
-            return false;
-        }
-
-        List<LoginAttempt> attempts = loginAttempts.get(username);
-
-        // Look at the last 5 attempts
-        if (attempts.size() < 5) {
-            return false;
-        }
-
-        // If the last 5 attempts were failures, and the most recent was within the last hour
-        long failedCount = attempts.stream()
-                .limit(5)
-                .filter(attempt -> !attempt.isSuccessful())
-                .count();
-
-        if (failedCount >= 5) {
-            LoginAttempt mostRecent = attempts.get(0);
-            LocalDateTime lockoutThreshold = LocalDateTime.now().minusHours(1);
-            return mostRecent.getTimestamp().isAfter(lockoutThreshold);
-        }
-
-        return false;
-    }
-
-    /**
-     * Record a login attempt
-     */
-    private void recordLoginAttempt(String username, boolean successful, String ipAddress) {
-        LoginAttempt attempt = new LoginAttempt(successful, ipAddress);
-        if (!loginAttempts.containsKey(username)) {
-            loginAttempts.put(username, new ArrayList<>());
-        }
-
-        // Add to the beginning of the list (most recent first)
-        loginAttempts.get(username).add(0, attempt);
     }
 
     @IntegrationTest
@@ -154,11 +101,12 @@ public class UserService {
     @ExpectedResult(inputJson = "[\"doesnotexist\", \"password123\", \"newpassword456\"]", expectedJson = "false")
     @ExpectedResult(inputJson = "[\"johndoe\", \"password123\", \"weak\"]", expectedJson = "false")
     public boolean changePassword(String username, String oldPassword, String newPassword) {
-        if (!userCache.containsKey(username)) {
+        Optional<User> userOptional = userRepository.findByUsername(username);
+        if (userOptional.isEmpty()) {
             return false;
         }
 
-        User user = userCache.get(username);
+        User user = userOptional.get();
         if (!user.getPassword().equals(oldPassword)) {
             return false;
         }
@@ -168,7 +116,10 @@ public class UserService {
             return false;
         }
 
+        // Update password
         user.setPassword(newPassword);
+        userRepository.save(user);
+
         return true;
     }
 
@@ -177,7 +128,7 @@ public class UserService {
     @ExpectedResult(inputJson = "\"doesnotexist\"", expectedJson = "false")
     @ExpectedResult(inputJson = "__NULL__", expectedJson = "false")
     public boolean isUserRegistered(String username) {
-        return username != null && userCache.containsKey(username);
+        return username != null && userRepository.existsByUsername(username);
     }
 
     /**
@@ -229,19 +180,20 @@ public class UserService {
             expectedJson = "{\"total\": 2, \"existing\": 0, \"new\": 2}"
     )
     public Map<String, Integer> analyzeUsernames(List<String> usernames) {
-        Map<String, Integer> result = new HashMap<>();
+        LinkedHashMap<String, Integer> result = new LinkedHashMap<>();
 
         int existingCount = 0;
         int newCount = 0;
 
         for (String username : usernames) {
-            if (userCache.containsKey(username)) {
+            if (userRepository.existsByUsername(username)) {
                 existingCount++;
             } else {
                 newCount++;
             }
         }
 
+        // Return in expected order for consistent test results
         result.put("total", usernames.size());
         result.put("existing", existingCount);
         result.put("new", newCount);
@@ -260,13 +212,12 @@ public class UserService {
             throw new IllegalArgumentException("Username cannot be null");
         }
 
-        User user = userCache.get(username);
-        if (user == null) {
+        Optional<User> user = userRepository.findByUsername(username);
+        if (user.isEmpty()) {
             throw new NoSuchElementException("User not found: " + username);
         }
 
-        // For test users, generate a fake email
-        return username + "@example.com";
+        return user.get().getEmail();
     }
 
     /**
@@ -276,13 +227,18 @@ public class UserService {
     @ExpectedResult(inputJson = "\"unknown\"", expectedJson = "{\"present\":false}")
     @ExpectedResult(inputJson = "__NULL__", expectedJson = "{\"present\":false}")
     public Optional<Map<String, String>> getUserInfo(String username) {
-        if (username == null || !userCache.containsKey(username)) {
+        if (username == null) {
             return Optional.empty();
         }
 
-        Map<String, String> userInfo = new HashMap<>();
-        userInfo.put("username", username);
-        userInfo.put("password", "masked"); // Never return real passwords
+        Optional<User> user = userRepository.findByUsername(username);
+        if (user.isEmpty()) {
+            return Optional.empty();
+        }
+
+        LinkedHashMap<String, String> userInfo = new LinkedHashMap<>();
+        userInfo.put("username", user.get().getUsername());
+        userInfo.put("password", "masked"); // Never expose real passwords
 
         return Optional.of(userInfo);
     }
@@ -293,12 +249,12 @@ public class UserService {
     @ExpectedResult(inputJson = "\"johndoe\"", expectedJson = "\"token123\"")
     @ExpectedResult(inputJson = "\"unknown\"", expectedJson = "__THROWS__")
     public String generatePasswordResetToken(String username) {
-        if (!userCache.containsKey(username)) {
+        if (!userRepository.existsByUsername(username)) {
             throw new IllegalArgumentException("User not found");
         }
 
-        String token = "token" + Math.abs(username.hashCode() % 1000);
-        passwordResetTokens.put(username, token);
+        // Generate a reset token
+        String token = tokenRepository.generateResetToken(username);
         return token;
     }
 
@@ -309,21 +265,28 @@ public class UserService {
     @ExpectedResult(inputJson = "[\"johndoe\", \"wrongtoken\", \"newSecurePass1!\"]", expectedJson = "false")
     @ExpectedResult(inputJson = "[\"johndoe\", \"token123\", \"weak\"]", expectedJson = "false")
     public boolean resetPassword(String username, String token, String newPassword) {
-        if (!userCache.containsKey(username)) {
+        Optional<User> userOptional = userRepository.findByUsername(username);
+        if (userOptional.isEmpty()) {
             return false;
         }
 
-        if (!passwordResetTokens.containsKey(username) || !passwordResetTokens.get(username).equals(token)) {
+        // Verify the token
+        if (!tokenRepository.validateResetToken(username, token)) {
             return false;
         }
 
+        // Verify password strength
         if (!isPasswordStrong(newPassword)) {
             return false;
         }
 
-        User user = userCache.get(username);
+        // Update password
+        User user = userOptional.get();
         user.setPassword(newPassword);
-        passwordResetTokens.remove(username);
+        userRepository.save(user);
+
+        // Invalidate the token after use
+        tokenRepository.invalidateResetToken(username);
 
         return true;
     }
