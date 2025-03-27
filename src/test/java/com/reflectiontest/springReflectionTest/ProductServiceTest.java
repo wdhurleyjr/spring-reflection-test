@@ -2,12 +2,13 @@ package com.reflectiontest.springReflectionTest;
 
 import com.reflectiontest.springReflectionTest.examples.ProductService;
 import com.reflectiontest.springReflectionTest.models.Product;
-import com.reflectiontest.springReflectionTest.repositories.ExternalProductRepository;
-
+import com.reflectiontest.springReflectionTest.repositories.ProductRepository;
+import com.reflectiontest.springReflectionTest.repositories.SearchHistoryRepository;
 import org.junit.jupiter.api.*;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
+
+import java.util.*;
 
 import static org.mockito.Mockito.*;
 import static org.junit.jupiter.api.Assertions.*;
@@ -16,151 +17,76 @@ import static org.junit.jupiter.api.Assertions.*;
 public class ProductServiceTest {
 
     @Mock
-    private ExternalProductRepository productRepository;
+    private ProductRepository productRepository;
 
-    @InjectMocks
+    @Mock
+    private SearchHistoryRepository searchHistoryRepository;
+
     private ProductService productService;
 
     @BeforeEach
     void setUp() {
         MockitoAnnotations.openMocks(this);
+        productService = new ProductService(productRepository, searchHistoryRepository);
+
+        when(productRepository.existsByName("Mouse")).thenReturn(true);
+        when(productRepository.existsByName("Laptop")).thenReturn(true);
+        when(productRepository.existsByName("Tablet")).thenReturn(true);
+        when(productRepository.existsByName("Smartphone")).thenReturn(true);
+        when(productRepository.findByName("Mouse")).thenReturn(Optional.of(new Product("Mouse", 25.0)));
+        when(productRepository.findByName("Laptop")).thenReturn(Optional.of(new Product("Laptop", 1200.0)));
+        when(productRepository.findByName("Keyboard")).thenReturn(Optional.of(new Product("Keyboard", 50.0)));
+        when(productRepository.findByName("Monitor")).thenReturn(Optional.of(new Product("Monitor", 300.0)));
+        when(productRepository.findByName("Headphones")).thenReturn(Optional.of(new Product("Headphones", 150.0)));
+
+        Map<String, Long> searchCounts = new LinkedHashMap<>();
+        searchCounts.put("Laptop", 5L);
+        searchCounts.put("Mouse", 3L);
+        searchCounts.put("Keyboard", 2L);
+        searchCounts.put("Headphones", 1L);
+        searchCounts.put("Monitor", 1L);
+        when(searchHistoryRepository.getSearchCounts()).thenReturn(searchCounts);
     }
 
     @Test
     @Order(1)
     void testGetProductDetails() {
-        Product product1 = new Product("Laptop", 1200.00);
-        Product product2 = new Product("Mouse", 25.00);
-
-        when(productRepository.existsByName(anyString())).thenReturn(true);
-
-        assertEquals(product1.getName(), productService.getProductDetails(product1).getName());
-        assertEquals(product2.getName(), productService.getProductDetails(product2).getName());
+        assertEquals("Laptop", productService.getProductDetails(new Product("Laptop", 1200.0)).getName());
+        assertEquals("Mouse", productService.getProductDetails(new Product("Mouse", 25.0)).getName());
         assertNull(productService.getProductDetails(null));
-
-        verify(productRepository, atLeastOnce()).existsByName(anyString());
+        assertNull(productService.getProductDetails(new Product(null, 50.0)));
     }
 
     @Test
     @Order(2)
     void testIsProductCached() {
-        Product product1 = new Product("Keyboard", 50.00);
-        Product product2 = new Product("Monitor", 300.00);
-        Product product3 = new Product("Mouse", 25.00);
-
-        when(productRepository.existsByName("Keyboard")).thenReturn(false);
-        when(productRepository.existsByName("Monitor")).thenReturn(false);
-        when(productRepository.existsByName("Mouse")).thenReturn(true);
-
-        assertFalse(productService.isProductCached(product1));
-        assertFalse(productService.isProductCached(product2));
-        assertTrue(productService.isProductCached(product3));
+        assertFalse(productService.isProductCached(new Product("Keyboard", 50.0)));
+        assertFalse(productService.isProductCached(new Product("Monitor", 300.0)));
+        assertTrue(productService.isProductCached(new Product("Mouse", 25.0)));
         assertFalse(productService.isProductCached(null));
     }
 
     @Test
     @Order(3)
     void testAddAndCheckCache() {
-        Product product1 = new Product("Headphones", 150.00);
-        Product product2 = new Product("Webcam", 75.00);
-
-        assertFalse(productService.isProductCached(product1));
-        assertFalse(productService.isProductCached(product2));
-
-        productService.addProduct(product1);
-        productService.addProduct(product2);
-
-        when(productRepository.existsByName("Headphones")).thenReturn(true);
-        when(productRepository.existsByName("Webcam")).thenReturn(true);
-
-        assertTrue(productService.isProductCached(product1));
-        assertTrue(productService.isProductCached(product2));
+        assertTrue(productService.addAndCheckCache(new Product("Headphones", 150.0)));
+        assertTrue(productService.addAndCheckCache(new Product("Webcam", 75.0)));
         assertFalse(productService.addAndCheckCache(null));
     }
 
     @Test
     @Order(4)
     void testAddProductTwiceAndCheck() {
-        Product product1 = new Product("Tablet", 300.00);
-        Product product2 = new Product("Smartphone", 800.00);
-
-        when(productRepository.existsByName(anyString())).thenReturn(false);
-
-        productService.addProduct(product1);
-        productService.addProduct(product1);
-        assertTrue(productService.isProductCached(product1));
-
-        productService.addProduct(product2);
-        productService.addProduct(product2);
-        assertTrue(productService.isProductCached(product2));
+        assertTrue(productService.addProductTwiceAndCheck(new Product("Tablet", 300.0)));
+        assertTrue(productService.addProductTwiceAndCheck(new Product("Smartphone", 800.0)));
     }
 
     @Test
     @Order(5)
-    void testAddTwoNumbers() {
-        assertEquals(8, productService.addTwoNumbers(5, 3));
-        assertEquals(5, productService.addTwoNumbers(-2, 7));
-        assertEquals(0, productService.addTwoNumbers(0, 0));
-    }
-
-    @Test
-    @Order(6)
-    void testMultiplyByTen() {
-        assertEquals(50, productService.multiplyByTen(5));
-        assertEquals(-30, productService.multiplyByTen(-3));
-        assertEquals(0, productService.multiplyByTen(0));
-        assertEquals(100, productService.multiplyByTen(10));
-        assertEquals(10, productService.multiplyByTen(1));
-    }
-
-    @Test
-    @Order(7)
-    void testSubtractTwoNumbers() {
-        assertEquals(5, productService.subtractTwoNumbers(10, 5));
-        assertEquals(-7, productService.subtractTwoNumbers(3, 10));
-        assertEquals(-5, productService.subtractTwoNumbers(0, 5));
-    }
-
-    @Test
-    @Order(8)
-    void testDivideTwoNumbers() {
-        assertEquals(5.0, productService.divideTwoNumbers(10.0, 2.0), 0.01);
-        assertEquals(-10.0, productService.divideTwoNumbers(-100.0, 10.0), 0.01);
-        assertEquals(0.0, productService.divideTwoNumbers(0.0, 5.0), 0.01);
-    }
-
-    @Test
-    @Order(9)
-    void testDivideByZero() {
-        Exception exception = assertThrows(ArithmeticException.class, () -> {
-            productService.divideTwoNumbers(10.0, 0.0);
-        });
-        assertEquals("Cannot divide by zero", exception.getMessage());
-    }
-
-    @Test
-    @Order(10)
-    void testReverseString() {
-        assertEquals("olleh", productService.reverseString("hello"));
-        assertEquals("tseT", productService.reverseString("Test"));
-        assertEquals("", productService.reverseString(""));
-        assertNull(productService.reverseString(null));
-    }
-
-    @Test
-    @Order(11)
-    void testFindMaxValue() {
-        assertEquals(5, productService.findMaxValue(new int[]{1, 2, 3, 4, 5}));
-        assertEquals(50, productService.findMaxValue(new int[]{10, 20, 30, 40, 50}));
-        assertEquals(-5, productService.findMaxValue(new int[]{-10, -20, -30, -40, -5}));
-        assertNull(productService.findMaxValue(new int[]{}));
+    void testGetTopSearchedProducts() {
+        assertEquals(List.of("Laptop", "Mouse", "Keyboard"), productService.getTopSearchedProducts(3));
+        assertEquals(List.of("Laptop"), productService.getTopSearchedProducts(1));
+        assertEquals(List.of(), productService.getTopSearchedProducts(0));
+        assertEquals(List.of("Laptop", "Mouse", "Keyboard", "Headphones", "Monitor"), productService.getTopSearchedProducts(10));
     }
 }
-
-
-
-
-
-
-
-

@@ -2,7 +2,6 @@ package com.reflectiontest.springReflectionTest;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.DeserializationFeature;
-import com.fasterxml.jackson.databind.JavaType;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.module.SimpleModule;
@@ -12,42 +11,38 @@ import com.reflectiontest.springReflectionTest.annotations.MockDependency;
 import com.reflectiontest.springReflectionTest.metrics.MetricsCollector;
 import com.reflectiontest.springReflectionTest.models.Product;
 import com.reflectiontest.springReflectionTest.models.User;
-import com.reflectiontest.springReflectionTest.repositories.*;
 import com.reflectiontest.springReflectionTest.reporting.TestReport;
 import com.reflectiontest.springReflectionTest.reporting.TestReportBuilder;
+import com.reflectiontest.springReflectionTest.repositories.AuthenticationRepository;
+import com.reflectiontest.springReflectionTest.repositories.ExternalProductRepository;
+import com.reflectiontest.springReflectionTest.repositories.ProductRepository;
+import com.reflectiontest.springReflectionTest.repositories.SearchHistoryRepository;
+import com.reflectiontest.springReflectionTest.repositories.TokenRepository;
+import com.reflectiontest.springReflectionTest.repositories.UserRepository;
 import com.reflectiontest.springReflectionTest.util.BytecodeHashUtil;
-import com.reflectiontest.springReflectionTest.util.TestCaseUtil;
 import org.mockito.Mockito;
 import org.reflections.Reflections;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
-import java.lang.reflect.Field;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
+import java.lang.reflect.*;
 import java.util.*;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 /**
- * Enhanced Unit Test Runner that executes reflection-based tests with performance metrics.
- * Supports parallel execution, reporting, and bytecode verification.
+ * Simplified Unit Test Runner
  */
 public class UnitTestRunner {
     private static final Logger logger = LoggerFactory.getLogger(UnitTestRunner.class);
     private static final ObjectMapper objectMapper = configureObjectMapper();
     private static final Map<Class<?>, Object> mockInstances = new HashMap<>();
     private static final String NULL_PLACEHOLDER = "__NULL__";
-    private static final int DEFAULT_THREADS = Runtime.getRuntime().availableProcessors();
 
     // Configuration properties
-    private final boolean parallelExecution;
     private final boolean collectMetrics;
     private final boolean verifyBytecodeHash;
-    private final int maxThreads;
     private final String basePackage;
 
     // Services
@@ -59,40 +54,29 @@ public class UnitTestRunner {
      */
     private static ObjectMapper configureObjectMapper() {
         ObjectMapper mapper = new ObjectMapper();
-        // Add support for Java 8 features like Optional
         mapper.registerModule(new Jdk8Module());
-        // Configure mapper for consistent serialization
         mapper.configure(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS, true);
-        // Handle unknown properties gracefully
         mapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
-
-        // Configure Optional serialization to match expected format
-        SimpleModule module = new SimpleModule();
-        mapper.registerModule(module);
-
+        mapper.registerModule(new SimpleModule());
         return mapper;
     }
 
-    // Test runner constructor with default configuration
+    // Simplified constructor
     public UnitTestRunner() {
-        this(detectBasePackage(), true, true, false, DEFAULT_THREADS);
+        this(detectBasePackage(), true, true);
     }
 
-    // Test runner constructor with custom configuration
-    public UnitTestRunner(String basePackage, boolean parallelExecution, boolean collectMetrics,
-                          boolean verifyBytecodeHash, int maxThreads) {
+    // Constructor with configuration options
+    public UnitTestRunner(String basePackage, boolean collectMetrics, boolean verifyBytecodeHash) {
         this.basePackage = basePackage;
-        this.parallelExecution = parallelExecution;
         this.collectMetrics = collectMetrics;
         this.verifyBytecodeHash = verifyBytecodeHash;
-        this.maxThreads = maxThreads;
 
         this.metricsCollector = new MetricsCollector();
         this.reportBuilder = new TestReportBuilder();
 
-        logger.info("Initializing UnitTestRunner with: parallelExecution={}, collectMetrics={}, " +
-                        "verifyBytecodeHash={}, maxThreads={}, basePackage={}",
-                parallelExecution, collectMetrics, verifyBytecodeHash, maxThreads, basePackage);
+        logger.info("Initializing UnitTestRunner with: basePackage={}, collectMetrics={}, verifyBytecodeHash={}",
+                basePackage, collectMetrics, verifyBytecodeHash);
     }
 
     /**
@@ -102,35 +86,23 @@ public class UnitTestRunner {
      */
     public TestReport runTests() {
         logger.info("🔍 Starting test run in package: {}", basePackage);
-        long startTime = System.nanoTime();
 
         Reflections reflections = new Reflections(basePackage);
         Set<Class<?>> serviceClasses = reflections.getTypesAnnotatedWith(Service.class);
 
         logger.info("Found {} service classes to test", serviceClasses.size());
 
-        if (parallelExecution) {
-            return runTestsInParallel(serviceClasses);
-        } else {
-            return runTestsSequentially(serviceClasses);
-        }
-    }
+        // Create mocks for the known repository interfaces
+        createAndConfigureMocks();
 
-    /**
-     * Runs tests for all service classes sequentially
-     */
-    private TestReport runTestsSequentially(Set<Class<?>> serviceClasses) {
-        logger.info("Running tests sequentially");
-
+        // Runs tests sequentially
         for (Class<?> clazz : serviceClasses) {
             try {
-                // Create all mocks first
-                createAllMocks(clazz);
-
-                Object serviceInstance = clazz.getDeclaredConstructor().newInstance();
-                injectMocks(serviceInstance);
-
-                runTestsForClass(serviceInstance);
+                // Create instance with constructor or field injection
+                Object serviceInstance = createServiceInstance(clazz);
+                if (serviceInstance != null) {
+                    runTestsForClass(serviceInstance);
+                }
             } catch (Exception e) {
                 logger.error("Error instantiating class {}: {}", clazz.getName(), e.getMessage());
                 reportBuilder.addError(clazz.getName(), "Class initialization failed", e);
@@ -146,81 +118,188 @@ public class UnitTestRunner {
     }
 
     /**
-     * Create all needed mocks for a class
+     * Creates and configures mocks for all repository interfaces
      */
-    private void createAllMocks(Class<?> clazz) {
-        try {
-            // Find all fields with @MockDependency
-            for (Field field : clazz.getDeclaredFields()) {
-                if (field.isAnnotationPresent(MockDependency.class)) {
-                    Class<?> fieldType = field.getType();
+    private void createAndConfigureMocks() {
+        // UserRepository
+        UserRepository userRepo = Mockito.mock(UserRepository.class);
+        mockInstances.put(UserRepository.class, userRepo);
 
-                    // Create mock if not already created
-                    if (!mockInstances.containsKey(fieldType)) {
-                        Object mockInstance = Mockito.mock(fieldType);
-                        mockInstances.put(fieldType, mockInstance);
+        // Configure specific behavior
+        Mockito.when(userRepo.existsByUsername("johndoe")).thenReturn(true);
+        Mockito.when(userRepo.existsByUsername("admin")).thenReturn(true);
+        Mockito.when(userRepo.existsByUsername("doesnotexist")).thenReturn(false);
+        Mockito.when(userRepo.existsByUsername("newuser")).thenReturn(false);
+
+        // For any other username
+        Mockito.when(userRepo.existsByUsername(Mockito.argThat(arg ->
+                arg != null && !arg.equals("johndoe") && !arg.equals("admin") &&
+                        !arg.equals("doesnotexist") && !arg.equals("newuser"))
+        )).thenReturn(false);
+
+        // findByUsername mock
+        User johndoe = new User("johndoe", "johndoe@example.com", "password123", "user");
+        User admin = new User("admin", "admin@system.com", "admin123", "admin");
+
+        Mockito.when(userRepo.findByUsername("johndoe")).thenReturn(Optional.of(johndoe));
+        Mockito.when(userRepo.findByUsername("admin")).thenReturn(Optional.of(admin));
+        Mockito.when(userRepo.findByUsername(Mockito.argThat(arg ->
+                arg != null && !arg.equals("johndoe") && !arg.equals("admin"))
+        )).thenReturn(Optional.empty());
+
+        // Save mock
+        Mockito.when(userRepo.save(Mockito.any(User.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        // AuthenticationRepository
+        AuthenticationRepository authRepo = Mockito.mock(AuthenticationRepository.class);
+        mockInstances.put(AuthenticationRepository.class, authRepo);
+
+        Mockito.when(authRepo.isAccountLocked("lockedUser")).thenReturn(true);
+        Mockito.when(authRepo.isAccountLocked(Mockito.argThat(arg ->
+                arg != null && !arg.equals("lockedUser"))
+        )).thenReturn(false);
+
+        Mockito.doNothing().when(authRepo).recordLoginAttempt(
+                Mockito.anyString(), Mockito.anyBoolean(), Mockito.anyString());
+
+        Mockito.when(authRepo.getFailedLoginAttempts("lockedUser")).thenReturn(5);
+        Mockito.when(authRepo.getFailedLoginAttempts("repeatOffender")).thenReturn(3);
+        Mockito.when(authRepo.getFailedLoginAttempts(Mockito.argThat(arg ->
+                arg != null && !arg.equals("lockedUser") && !arg.equals("repeatOffender"))
+        )).thenReturn(0);
+
+        // TokenRepository
+        TokenRepository tokenRepo = Mockito.mock(TokenRepository.class);
+        mockInstances.put(TokenRepository.class, tokenRepo);
+
+        Mockito.when(tokenRepo.generateResetToken("johndoe")).thenReturn("token123");
+        Mockito.when(tokenRepo.generateResetToken("admin")).thenReturn("token456");
+        Mockito.when(tokenRepo.generateResetToken("newuser")).thenReturn("token789");
+        Mockito.when(tokenRepo.generateResetToken(Mockito.anyString())).thenReturn("defaultToken");
+
+        Mockito.when(tokenRepo.validateResetToken("johndoe", "token123")).thenReturn(true);
+        Mockito.when(tokenRepo.validateResetToken("admin", "token456")).thenReturn(true);
+        Mockito.when(tokenRepo.validateResetToken(Mockito.anyString(), Mockito.anyString())).thenReturn(false);
+
+        Mockito.doNothing().when(tokenRepo).invalidateResetToken(Mockito.anyString());
+
+        // ProductRepository
+        ProductRepository productRepo = Mockito.mock(ProductRepository.class);
+        mockInstances.put(ProductRepository.class, productRepo);
+
+        Mockito.when(productRepo.existsByName("Laptop")).thenReturn(true);
+        Mockito.when(productRepo.existsByName("Mouse")).thenReturn(true);
+        Mockito.when(productRepo.existsByName(Mockito.argThat(arg ->
+                arg != null && !arg.equals("Laptop") && !arg.equals("Mouse"))
+        )).thenReturn(false);
+
+        Product laptop = new Product("Laptop", 1200.00);
+        Product mouse = new Product("Mouse", 25.00);
+
+        Mockito.when(productRepo.findByName("Laptop")).thenReturn(Optional.of(laptop));
+        Mockito.when(productRepo.findByName("Mouse")).thenReturn(Optional.of(mouse));
+        Mockito.when(productRepo.findByName(Mockito.argThat(arg ->
+                arg != null && !arg.equals("Laptop") && !arg.equals("Mouse"))
+        )).thenReturn(Optional.empty());
+
+        Mockito.when(productRepo.save(Mockito.any(Product.class))).thenAnswer(invocation -> {
+            Product product = invocation.getArgument(0);
+            // Update our specific mock behavior for existsByName
+            if (product != null && product.getName() != null) {
+                Mockito.when(productRepo.existsByName(product.getName())).thenReturn(true);
+            }
+            return product;
+        });
+
+        Mockito.doNothing().when(productRepo).deleteByName(Mockito.anyString());
+
+        // SearchHistoryRepository
+        SearchHistoryRepository searchRepo = Mockito.mock(SearchHistoryRepository.class);
+        mockInstances.put(SearchHistoryRepository.class, searchRepo);
+
+        Map<String, Long> searchCounts = new LinkedHashMap<>();
+        searchCounts.put("Laptop", 5L);
+        searchCounts.put("Mouse", 3L);
+        searchCounts.put("Keyboard", 2L);
+        searchCounts.put("Headphones", 1L);
+        searchCounts.put("Monitor", 1L);
+
+        Mockito.when(searchRepo.getSearchCounts()).thenReturn(searchCounts);
+        Mockito.doNothing().when(searchRepo).saveSearch(Mockito.anyString());
+        Mockito.doNothing().when(searchRepo).clearHistory();
+
+        // ExternalProductRepository (if needed)
+        ExternalProductRepository externalProductRepo = Mockito.mock(ExternalProductRepository.class);
+        mockInstances.put(ExternalProductRepository.class, externalProductRepo);
+
+        Mockito.when(externalProductRepo.existsByName(Mockito.anyString())).thenReturn(false);
+    }
+
+    /**
+     * Creates a service instance with mocked dependencies
+     */
+    private Object createServiceInstance(Class<?> clazz) {
+        try {
+            // Try constructor injection first
+            for (Constructor<?> constructor : clazz.getDeclaredConstructors()) {
+                Class<?>[] paramTypes = constructor.getParameterTypes();
+                if (paramTypes.length > 0) {
+                    boolean canInject = true;
+                    Object[] args = new Object[paramTypes.length];
+
+                    for (int i = 0; i < paramTypes.length; i++) {
+                        if (!mockInstances.containsKey(paramTypes[i])) {
+                            canInject = false;
+                            break;
+                        }
+                        args[i] = mockInstances.get(paramTypes[i]);
+                    }
+
+                    if (canInject) {
+                        constructor.setAccessible(true);
+                        Object instance = constructor.newInstance(args);
+                        logger.info("Created instance of {} using constructor injection", clazz.getSimpleName());
+                        return instance;
                     }
                 }
             }
 
-            // Set up default behaviors for all mocks
-            setupDefaultMockBehavior();
-
+            // Fallback to default constructor and field injection
+            Object instance = clazz.getDeclaredConstructor().newInstance();
+            injectMocks(instance);
+            logger.info("Created instance of {} using field injection", clazz.getSimpleName());
+            return instance;
         } catch (Exception e) {
-            logger.error("Error creating mocks for class {}: {}", clazz.getName(), e.getMessage());
+            logger.error("Could not create instance of {}: {}",
+                    clazz.getSimpleName(), e.getMessage(), e);
+            reportBuilder.addError(clazz.getName(), "Instance creation failed", e);
+            return null;
         }
     }
 
     /**
-     * Runs tests for all service classes in parallel
+     * Injects mock dependencies into fields marked with @MockDependency
      */
-    private TestReport runTestsInParallel(Set<Class<?>> serviceClasses) {
-        logger.info("Running tests in parallel with {} threads", maxThreads);
+    private void injectMocks(Object serviceInstance) {
+        try {
+            for (Field field : serviceInstance.getClass().getDeclaredFields()) {
+                if (field.isAnnotationPresent(MockDependency.class)) {
+                    field.setAccessible(true);
+                    Object mockInstance = mockInstances.get(field.getType());
 
-        // Create all mocks first to avoid concurrent mocking issues
-        for (Class<?> clazz : serviceClasses) {
-            createAllMocks(clazz);
-        }
-
-        // Set up mock behavior once for all threads
-        setupDefaultMockBehavior();
-
-        // Use try-with-resources to properly close the ExecutorService
-        try (var executorResource = new ExecutorServiceResource(maxThreads)) {
-            ExecutorService executor = executorResource.getExecutor();
-            List<Future<?>> futures = new ArrayList<>();
-
-            for (Class<?> clazz : serviceClasses) {
-                final Class<?> finalClass = clazz; // Make effectively final for lambda
-                futures.add(executor.submit(() -> {
-                    try {
-                        Object serviceInstance = finalClass.getDeclaredConstructor().newInstance();
-                        injectMocks(serviceInstance);
-
-                        runTestsForClass(serviceInstance);
-                    } catch (Exception e) {
-                        logger.error("Error instantiating class {}: {}", finalClass.getName(), e.getMessage());
-                        reportBuilder.addError(finalClass.getName(), "Class initialization failed", e);
+                    if (mockInstance != null) {
+                        field.set(serviceInstance, mockInstance);
+                        logger.debug("Injected mock for: {} in {}",
+                                field.getType().getSimpleName(),
+                                serviceInstance.getClass().getSimpleName());
+                    } else {
+                        logger.warn("No mock available for {}", field.getType().getSimpleName());
                     }
-                }));
-            }
-
-            // Wait for all test executions to complete
-            for (Future<?> future : futures) {
-                try {
-                    future.get();
-                } catch (Exception e) {
-                    logger.error("Error executing test in parallel: {}", e.getMessage());
                 }
             }
-        } // ExecutorService will be shutdown here automatically
-
-        if (collectMetrics) {
-            metricsCollector.recordTotalExecutionTime(System.nanoTime() - metricsCollector.getStartTime());
-            reportBuilder.setMetrics(metricsCollector.getMetrics());
+        } catch (Exception e) {
+            logger.error("Error injecting mocks: {}", e.getMessage(), e);
         }
-
-        return reportBuilder.build();
     }
 
     /**
@@ -246,167 +325,12 @@ public class UnitTestRunner {
     }
 
     /**
-     * Verifies if method bytecode has changed compared to the stored hash
-     */
-    private void verifyMethodBytecode(Class<?> clazz, Method method) {
-        try {
-            String currentHash = BytecodeHashUtil.generateMethodHash(clazz, method);
-            String storedHash = BytecodeHashUtil.getStoredMethodHash(clazz, method);
-
-            if (storedHash != null && !currentHash.equals(storedHash)) {
-                logger.warn("⚠️ Method bytecode has changed: {}.{}",
-                        clazz.getSimpleName(), method.getName());
-                reportBuilder.addWarning(clazz.getName(), method.getName(),
-                        "Method bytecode has changed since tests were generated");
-            } else if (storedHash == null) {
-                // Store hash if it doesn't exist
-                BytecodeHashUtil.storeMethodHash(clazz, method, currentHash);
-            }
-        } catch (Exception e) {
-            logger.error("Error verifying bytecode for {}.{}: {}",
-                    clazz.getSimpleName(), method.getName(), e.getMessage());
-        }
-    }
-
-    /**
-     * Set up default mock behavior for repositories
-     * This simplified version avoids concurrency issues
-     */
-    private void setupDefaultMockBehavior() {
-        try {
-            // Product Repository mock setup
-            if (mockInstances.containsKey(ProductRepository.class)) {
-                ProductRepository productRepo = (ProductRepository) mockInstances.get(ProductRepository.class);
-
-                // Set up product repository behavior - use simple when/thenReturn syntax
-                Product laptop = new Product("Laptop", 1200.0);
-                Product mouse = new Product("Mouse", 25.0);
-
-                Mockito.when(productRepo.existsByName("Mouse")).thenReturn(true);
-                Mockito.when(productRepo.existsByName("Headphones")).thenReturn(true);
-                Mockito.when(productRepo.existsByName("Webcam")).thenReturn(true);
-                Mockito.when(productRepo.existsByName("Tablet")).thenReturn(true);
-                Mockito.when(productRepo.existsByName("Smartphone")).thenReturn(true);
-
-                Mockito.when(productRepo.findByName("Laptop")).thenReturn(Optional.of(laptop));
-                Mockito.when(productRepo.findByName("Mouse")).thenReturn(Optional.of(mouse));
-
-                // Configure save method to return the same product
-                Mockito.when(productRepo.save(Mockito.any(Product.class))).thenAnswer(i -> i.getArgument(0));
-            }
-
-            // External Product Repository mock setup
-            if (mockInstances.containsKey(ExternalProductRepository.class)) {
-                ExternalProductRepository externalRepo = (ExternalProductRepository) mockInstances.get(ExternalProductRepository.class);
-
-                // Set up external repository behavior
-                Mockito.when(externalRepo.existsByName("Laptop")).thenReturn(true);
-            }
-
-            // Search History Repository mock setup
-            if (mockInstances.containsKey(SearchHistoryRepository.class)) {
-                SearchHistoryRepository searchRepo = (SearchHistoryRepository) mockInstances.get(SearchHistoryRepository.class);
-
-                // Set up search counts for getTopSearchedProducts
-                Map<String, Long> searchCounts = new LinkedHashMap<>();
-                searchCounts.put("Laptop", 5L);
-                searchCounts.put("Mouse", 3L);
-                searchCounts.put("Keyboard", 2L);
-                searchCounts.put("Monitor", 1L);
-                searchCounts.put("Headphones", 1L);
-
-                Mockito.when(searchRepo.getSearchCounts()).thenReturn(searchCounts);
-            }
-
-            // User Repository mock setup
-            if (mockInstances.containsKey(UserRepository.class)) {
-                UserRepository userRepo = (UserRepository) mockInstances.get(UserRepository.class);
-
-                // Create test user
-                User johnDoe = new User("johndoe", "johndoe@example.com", "password123", "USER");
-
-                // Handle the registerUser test case specially
-                if (currentMethodName.get() != null && currentMethodName.get().contains("registerUser")) {
-                    Mockito.when(userRepo.existsByUsername("johndoe")).thenReturn(false);
-                } else {
-                    Mockito.when(userRepo.existsByUsername("johndoe")).thenReturn(true);
-                }
-
-                Mockito.when(userRepo.findByUsername("johndoe")).thenReturn(Optional.of(johnDoe));
-
-                // Configure save method to return the same user
-                Mockito.when(userRepo.save(Mockito.any(User.class))).thenAnswer(i -> i.getArgument(0));
-            }
-
-            // Authentication Repository mock setup
-            if (mockInstances.containsKey(AuthenticationRepository.class)) {
-                AuthenticationRepository authRepo = (AuthenticationRepository) mockInstances.get(AuthenticationRepository.class);
-
-                // Set up authentication repository behavior
-                Mockito.when(authRepo.isAccountLocked("lockedUser")).thenReturn(true);
-            }
-
-            // Token Repository mock setup
-            if (mockInstances.containsKey(TokenRepository.class)) {
-                TokenRepository tokenRepo = (TokenRepository) mockInstances.get(TokenRepository.class);
-
-                // Set up token repository behavior
-                Mockito.when(tokenRepo.generateResetToken("johndoe")).thenReturn("token123");
-                Mockito.when(tokenRepo.validateResetToken("johndoe", "token123")).thenReturn(true);
-            }
-        } catch (Exception e) {
-            logger.error("Error setting up mock behavior: {}", e.getMessage());
-        }
-    }
-
-    // Thread local to track the current method being tested
-    private static final ThreadLocal<String> currentMethodName = new ThreadLocal<>();
-
-    /**
-     * Check if we're in the context of registerUser test
-     */
-    private boolean isRegisterUserContext() {
-        String methodName = currentMethodName.get();
-        return methodName != null && methodName.contains("registerUser");
-    }
-
-    /**
-     * Injects mock dependencies into a service instance
-     */
-    private void injectMocks(Object serviceInstance) throws IllegalAccessException {
-        for (Field field : serviceInstance.getClass().getDeclaredFields()) {
-            if (field.isAnnotationPresent(MockDependency.class)) {
-                field.setAccessible(true);
-
-                Object mockInstance = mockInstances.get(field.getType());
-                if (mockInstance != null) {
-                    field.set(serviceInstance, mockInstance);
-                    logger.debug("Injected mock for: {} in {}",
-                            field.getType().getSimpleName(), serviceInstance.getClass().getSimpleName());
-                }
-            }
-        }
-    }
-
-    /**
-     * Executes a single test case for a method
+     * Runs a single test case for a method
      */
     private void runTest(Object serviceInstance, Method method, String inputJson, String expectedJsonValue) {
         String methodId = serviceInstance.getClass().getName() + "." + method.getName();
-        String testCaseId = TestCaseUtil.generateTestCaseId(methodId, inputJson, expectedJsonValue);
 
         try {
-            // Set current method name for context
-            currentMethodName.set(methodId);
-
-            // Reset mocks before each test to ensure independent executions
-            for (Object mock : mockInstances.values()) {
-                Mockito.reset(mock);
-            }
-
-            // Set up mock behavior for this test
-            setupDefaultMockBehavior();
-
             long startTime = System.nanoTime();
             Class<?>[] paramTypes = method.getParameterTypes();
             Object[] methodParams;
@@ -435,6 +359,7 @@ public class UnitTestRunner {
                             inputJson, "Expected exception but none was thrown", null, duration);
                     logger.error("❌ FAILED: {}({}) - Expected exception but method completed normally",
                             method.getName(), inputJson);
+                    metricsCollector.recordTestFailed();
                 } else {
                     // Compare expected and actual outputs
                     Object expectedOutput = parseExpectedOutput(expectedJsonValue, method.getReturnType());
@@ -453,11 +378,13 @@ public class UnitTestRunner {
                                 inputJson, serializedExpected, serializedActual, duration);
                         logger.info("✅ PASSED: {}({}) -> {} [{}ms]",
                                 method.getName(), inputJson, actualOutput, duration);
+                        metricsCollector.recordTestPassed();
                     } else {
                         reportBuilder.addFailure(serviceInstance.getClass().getName(), method.getName(),
                                 inputJson, serializedExpected, serializedActual, duration);
                         logger.error("❌ FAILED: {}({}) - Expected: {}, Actual: {} [{}ms]",
                                 method.getName(), inputJson, expectedOutput, actualOutput, duration);
+                        metricsCollector.recordTestFailed();
                     }
                 }
             } catch (InvocationTargetException e) {
@@ -475,11 +402,13 @@ public class UnitTestRunner {
                             "Exception: " + cause.getClass().getSimpleName(), duration);
                     logger.info("✅ PASSED: {}({}) -> Exception: {} [{}ms]",
                             method.getName(), inputJson, cause.getClass().getSimpleName(), duration);
+                    metricsCollector.recordTestPassed();
                 } else {
                     reportBuilder.addError(serviceInstance.getClass().getName(), method.getName(),
                             inputJson, cause.getClass().getSimpleName() + ": " + cause.getMessage(), duration);
                     logger.error("❌ ERROR: {}({}) - Unexpected Exception: {} - {}",
                             method.getName(), inputJson, cause.getClass().getSimpleName(), cause.getMessage());
+                    metricsCollector.recordTestError();
                 }
             }
         } catch (Exception e) {
@@ -487,9 +416,280 @@ public class UnitTestRunner {
                     inputJson, e.getClass().getSimpleName() + ": " + e.getMessage(), 0);
             logger.error("❌ ERROR: {}({}) - Exception: {} - {}",
                     method.getName(), inputJson, e.getClass().getSimpleName(), e.getMessage());
-        } finally {
-            // Clear thread local
-            currentMethodName.remove();
+            metricsCollector.recordTestError();
+        }
+    }
+
+    /**
+     * Parses multiple parameters from a JSON array string
+     */
+    private Object[] parseMultipleInputs(String inputJson, Class<?>[] paramTypes) throws JsonProcessingException {
+        Object[] inputs = objectMapper.readValue(inputJson, Object[].class);
+        Object[] methodParams = new Object[paramTypes.length];
+
+        for (int i = 0; i < paramTypes.length; i++) {
+            if (i < inputs.length) {
+                String paramJson = objectMapper.writeValueAsString(inputs[i]);
+                methodParams[i] = parseInput(paramJson, paramTypes[i]);
+            } else {
+                methodParams[i] = null;
+            }
+        }
+
+        return methodParams;
+    }
+
+    /**
+     * Parses the expected output
+     */
+    private Object parseExpectedOutput(String json, Class<?> targetType) throws JsonProcessingException {
+        // Special handling for Optional
+        if (Optional.class.isAssignableFrom(targetType)) {
+            return json; // Return raw JSON string to handle expected format
+        }
+
+        return parseInput(json, targetType);
+    }
+
+    /**
+     * Parses input value from JSON string
+     */
+    private Object parseInput(String json, Class<?> targetType) throws JsonProcessingException {
+        if (json == null || json.equals(NULL_PLACEHOLDER)) {
+            return null;
+        }
+
+        // Handle special token replacements (Integer.MAX_VALUE, etc.)
+        json = replaceSpecialTokens(json);
+
+        // Handle primitive types
+        if (targetType == boolean.class || targetType == Boolean.class) {
+            if (json.equals("true") || json.equals("\"true\"")) return true;
+            if (json.equals("false") || json.equals("\"false\"")) return false;
+        }
+
+        if (targetType == int.class || targetType == Integer.class) {
+            try {
+                return Integer.parseInt(json.replace("\"", ""));
+            } catch (NumberFormatException e) {
+                // Not a simple integer, continue with normal parsing
+            }
+        }
+
+        // Handle specific model classes
+        if (targetType == User.class) {
+            try {
+                return objectMapper.readValue(json, User.class);
+            } catch (Exception e) {
+                logger.warn("Failed to parse User from JSON: {}", e.getMessage());
+                // Continue with normal parsing as fallback
+            }
+        }
+
+        if (targetType == Product.class) {
+            try {
+                return objectMapper.readValue(json, Product.class);
+            } catch (Exception e) {
+                logger.warn("Failed to parse Product from JSON: {}", e.getMessage());
+                // Continue with normal parsing as fallback
+            }
+        }
+
+        // Special handling for collections with generic types
+        if (Collection.class.isAssignableFrom(targetType) && json.startsWith("[")) {
+            // Try to infer the element type from the JSON content
+            return objectMapper.readValue(json, objectMapper.getTypeFactory().constructCollectionType(
+                    List.class, inferElementType(json)));
+        }
+
+        // Handle strings that might come with or without quotes
+        if (targetType == String.class) {
+            if (json.startsWith("\"") && json.endsWith("\"")) {
+                return json.substring(1, json.length() - 1);
+            }
+            return json;
+        }
+
+        return objectMapper.readValue(json, targetType);
+    }
+
+    /**
+     * Special handling for optional formatting
+     */
+    private String formatOptionalOutput(Object output) throws JsonProcessingException {
+        if (output == null) {
+            return "null";
+        }
+
+        if (output instanceof Optional<?>) {
+            Optional<?> optional = (Optional<?>) output;
+            if (optional.isPresent()) {
+                Map<String, Object> result = new LinkedHashMap<>();
+                result.put("present", true);
+                result.put("value", optional.get());
+                return objectMapper.writeValueAsString(result);
+            } else {
+                Map<String, Object> result = new LinkedHashMap<>();
+                result.put("present", false);
+                return objectMapper.writeValueAsString(result);
+            }
+        }
+
+        return objectMapper.writeValueAsString(output);
+    }
+
+    /**
+     * Runs tests for a specific service class
+     */
+    public TestReport runTestsForClass(String className) {
+        createAndConfigureMocks();
+
+        try {
+            Class<?> clazz = Class.forName(className);
+            if (!clazz.isAnnotationPresent(Service.class)) {
+                logger.warn("Class {} is not a Service", className);
+                return reportBuilder.build();
+            }
+
+            // Create service instance
+            Object serviceInstance = createServiceInstance(clazz);
+            if (serviceInstance != null) {
+                runTestsForClass(serviceInstance);
+            }
+
+            if (collectMetrics) {
+                reportBuilder.setMetrics(metricsCollector.getMetrics());
+            }
+
+            return reportBuilder.build();
+        } catch (Exception e) {
+            logger.error("Error running tests for class {}: {}", className, e.getMessage());
+            reportBuilder.addError(className, "Class initialization failed", e);
+            return reportBuilder.build();
+        }
+    }
+
+    /**
+     * Runs tests for a specific method
+     */
+    public TestReport runTestsForMethod(String className, String methodName) {
+        createAndConfigureMocks();
+
+        try {
+            Class<?> clazz = Class.forName(className);
+            if (!clazz.isAnnotationPresent(Service.class)) {
+                logger.warn("Class {} is not a Service", className);
+                return reportBuilder.build();
+            }
+
+            // Create service instance
+            Object serviceInstance = createServiceInstance(clazz);
+            if (serviceInstance == null) {
+                logger.error("Could not create instance of {}", className);
+                return reportBuilder.build();
+            }
+
+            Method method = null;
+            for (Method m : clazz.getDeclaredMethods()) {
+                if (m.getName().equals(methodName)) {
+                    method = m;
+                    break;
+                }
+            }
+
+            if (method == null) {
+                logger.warn("Method {} not found in class {}", methodName, className);
+                return reportBuilder.build();
+            }
+
+            ExpectedResult[] testCases = method.getAnnotationsByType(ExpectedResult.class);
+            if (testCases.length > 0) {
+                logger.info("Running tests for: {}.{}", clazz.getSimpleName(), method.getName());
+
+                if (verifyBytecodeHash) {
+                    verifyMethodBytecode(clazz, method);
+                }
+
+                for (ExpectedResult testCase : testCases) {
+                    runTest(serviceInstance, method, testCase.inputJson(), testCase.expectedJson());
+                }
+            } else {
+                logger.warn("No tests found for method {}.{}", className, methodName);
+            }
+
+            if (collectMetrics) {
+                reportBuilder.setMetrics(metricsCollector.getMetrics());
+            }
+
+            return reportBuilder.build();
+        } catch (Exception e) {
+            logger.error("Error running tests for method {}.{}: {}", className, methodName, e.getMessage());
+            reportBuilder.addError(className, methodName, "N/A", e.getMessage(), 0);
+            return reportBuilder.build();
+        }
+    }
+
+    /**
+     * Automatically detects the base package by checking the stack trace
+     */
+    private static String detectBasePackage() {
+        StackTraceElement[] stackTrace = Thread.currentThread().getStackTrace();
+        for (StackTraceElement element : stackTrace) {
+            if (element.getClassName().startsWith("com.")) {
+                String className = element.getClassName();
+                int lastDotIndex = className.lastIndexOf('.');
+                return lastDotIndex > 0 ? className.substring(0, lastDotIndex) : className;
+            }
+        }
+        return "com"; // Default to scanning all `com.` packages
+    }
+
+    /**
+     * Replace special tokens like Integer.MAX_VALUE with actual values
+     */
+    private String replaceSpecialTokens(String json) {
+        if (json == null) {
+            return null;
+        }
+
+        // Replace Integer constants
+        json = json.replace("Integer.MAX_VALUE", String.valueOf(Integer.MAX_VALUE));
+        json = json.replace("Integer.MIN_VALUE", String.valueOf(Integer.MIN_VALUE));
+
+        // Replace other constants if needed
+        json = json.replace("Long.MAX_VALUE", String.valueOf(Long.MAX_VALUE));
+        json = json.replace("Long.MIN_VALUE", String.valueOf(Long.MIN_VALUE));
+
+        return json;
+    }
+
+    /**
+     * Infer the element type for collections based on JSON content
+     */
+    private Class<?> inferElementType(String json) {
+        // Simplistic inference based on JSON content
+        if (json.contains("\"name\"") && json.contains("\"price\"")) {
+            // Looks like a Product
+            return findClassByName("Product");
+        } else if (json.contains("\"username\"") && json.contains("\"email\"")) {
+            // Looks like a User
+            return findClassByName("User");
+        } else {
+            // Default to Object
+            return Object.class;
+        }
+    }
+
+    /**
+     * Find a class by name in the base package
+     */
+    private Class<?> findClassByName(String className) {
+        try {
+            // Try with fully qualified name
+            return Class.forName("com.reflectiontest.springReflectionTest.models." + className);
+        } catch (ClassNotFoundException e) {
+            // Fall back to Object if not found
+            return Object.class;
         }
     }
 
@@ -578,247 +778,46 @@ public class UnitTestRunner {
     }
 
     /**
-     * Special handling for optional formatting
+     * Verifies if method bytecode has changed compared to the stored hash
      */
-    private String formatOptionalOutput(Object output) throws JsonProcessingException {
-        if (output == null) {
-            return "null";
-        }
-
-        if (output instanceof Optional<?>) {
-            Optional<?> optional = (Optional<?>) output;
-            if (optional.isPresent()) {
-                Map<String, Object> result = new LinkedHashMap<>();
-                result.put("present", true);
-                result.put("value", optional.get());
-                return objectMapper.writeValueAsString(result);
-            } else {
-                Map<String, Object> result = new LinkedHashMap<>();
-                result.put("present", false);
-                return objectMapper.writeValueAsString(result);
-            }
-        }
-
-        return objectMapper.writeValueAsString(output);
-    }
-
-    /**
-     * Parses multiple parameters from a JSON array string
-     */
-    private Object[] parseMultipleInputs(String inputJson, Class<?>[] paramTypes) throws JsonProcessingException {
-        Object[] inputs = objectMapper.readValue(inputJson, Object[].class);
-        Object[] methodParams = new Object[paramTypes.length];
-
-        for (int i = 0; i < paramTypes.length; i++) {
-            String paramJson = objectMapper.writeValueAsString(inputs[i]);
-            methodParams[i] = parseInput(paramJson, paramTypes[i]);
-        }
-
-        return methodParams;
-    }
-
-    /**
-     * Parses the expected output considering special cases
-     */
-    private Object parseExpectedOutput(String json, Class<?> targetType) throws JsonProcessingException {
-        // Special handling for Optional
-        if (Optional.class.isAssignableFrom(targetType)) {
-            return json; // Return raw JSON string to handle expected format
-        }
-
-        return parseInput(json, targetType);
-    }
-
-    /**
-     * Parses a single input parameter from JSON
-     */
-    private Object parseInput(String json, Class<?> targetType) throws JsonProcessingException {
-        if (json == null || json.equals(NULL_PLACEHOLDER)) {
-            return null;
-        }
-
-        // Special handling for collections of Product objects
-        if (List.class.isAssignableFrom(targetType) && json.contains("\"name\"") && json.contains("\"price\"")) {
-            JavaType type = objectMapper.getTypeFactory().constructCollectionType(List.class, Product.class);
-            return objectMapper.readValue(json, type);
-        }
-
-        // Handle special token replacements (Integer.MAX_VALUE, etc.)
-        json = replaceSpecialTokens(json);
-
-        return objectMapper.readValue(json, targetType);
-    }
-
-    /**
-     * Replace special tokens like Integer.MAX_VALUE with actual values
-     */
-    private String replaceSpecialTokens(String json) {
-        if (json == null) {
-            return null;
-        }
-
-        // Replace Integer constants
-        json = json.replace("Integer.MAX_VALUE", String.valueOf(Integer.MAX_VALUE));
-        json = json.replace("Integer.MIN_VALUE", String.valueOf(Integer.MIN_VALUE));
-
-        // Replace other constants if needed
-        json = json.replace("Long.MAX_VALUE", String.valueOf(Long.MAX_VALUE));
-        json = json.replace("Long.MIN_VALUE", String.valueOf(Long.MIN_VALUE));
-
-        return json;
-    }
-
-    /**
-     * Automatically detects the base package by checking the stack trace
-     */
-    private static String detectBasePackage() {
-        StackTraceElement[] stackTrace = Thread.currentThread().getStackTrace();
-        for (StackTraceElement element : stackTrace) {
-            if (element.getClassName().startsWith("com.")) {
-                String className = element.getClassName();
-                int lastDotIndex = className.lastIndexOf('.');
-                return lastDotIndex > 0 ? className.substring(0, lastDotIndex) : className;
-            }
-        }
-        return "com"; // Default to scanning all `com.` packages
-    }
-
-    /**
-     * Runs tests for a specific service class
-     */
-    public TestReport runTestsForClass(String className) {
+    private void verifyMethodBytecode(Class<?> clazz, Method method) {
         try {
-            Class<?> clazz = Class.forName(className);
-            if (!clazz.isAnnotationPresent(Service.class)) {
-                logger.warn("Class {} is not a Service", className);
-                return reportBuilder.build();
+            String currentHash = BytecodeHashUtil.generateMethodHash(clazz, method);
+            String storedHash = BytecodeHashUtil.getStoredMethodHash(clazz, method);
+
+            if (storedHash != null && !currentHash.equals(storedHash)) {
+                logger.warn("⚠️ Method bytecode has changed: {}.{}",
+                        clazz.getSimpleName(), method.getName());
+                reportBuilder.addWarning(clazz.getName(), method.getName(),
+                        "Method bytecode has changed since tests were generated");
+            } else if (storedHash == null) {
+                // Store hash if it doesn't exist
+                BytecodeHashUtil.storeMethodHash(clazz, method, currentHash);
             }
-
-            // Create mocks first
-            createAllMocks(clazz);
-
-            Object serviceInstance = clazz.getDeclaredConstructor().newInstance();
-            injectMocks(serviceInstance);
-
-            runTestsForClass(serviceInstance);
-
-            if (collectMetrics) {
-                reportBuilder.setMetrics(metricsCollector.getMetrics());
-            }
-
-            return reportBuilder.build();
         } catch (Exception e) {
-            logger.error("Error running tests for class {}: {}", className, e.getMessage());
-            reportBuilder.addError(className, "Class initialization failed", e);
-            return reportBuilder.build();
+            logger.error("Error verifying bytecode for {}.{}: {}",
+                    clazz.getSimpleName(), method.getName(), e.getMessage());
         }
     }
 
-    /**
-     * Runs tests for a specific method
-     */
-    public TestReport runTestsForMethod(String className, String methodName) {
-        try {
-            Class<?> clazz = Class.forName(className);
-            if (!clazz.isAnnotationPresent(Service.class)) {
-                logger.warn("Class {} is not a Service", className);
-                return reportBuilder.build();
-            }
-
-            // Create mocks first
-            createAllMocks(clazz);
-
-            Object serviceInstance = clazz.getDeclaredConstructor().newInstance();
-            injectMocks(serviceInstance);
-
-            Method method = null;
-            for (Method m : clazz.getDeclaredMethods()) {
-                if (m.getName().equals(methodName)) {
-                    method = m;
-                    break;
-                }
-            }
-
-            if (method == null) {
-                logger.warn("Method {} not found in class {}", methodName, className);
-                return reportBuilder.build();
-            }
-
-            ExpectedResult[] testCases = method.getAnnotationsByType(ExpectedResult.class);
-            if (testCases.length > 0) {
-                logger.info("Running tests for: {}.{}", clazz.getSimpleName(), method.getName());
-
-                if (verifyBytecodeHash) {
-                    verifyMethodBytecode(clazz, method);
-                }
-
-                for (ExpectedResult testCase : testCases) {
-                    runTest(serviceInstance, method, testCase.inputJson(), testCase.expectedJson());
-                }
-            } else {
-                logger.warn("No tests found for method {}.{}", className, methodName);
-            }
-
-            if (collectMetrics) {
-                reportBuilder.setMetrics(metricsCollector.getMetrics());
-            }
-
-            return reportBuilder.build();
-        } catch (Exception e) {
-            logger.error("Error running tests for method {}.{}: {}", className, methodName, e.getMessage());
-            reportBuilder.addError(className, methodName, "N/A", e.getMessage(), 0);
-            return reportBuilder.build();
-        }
-    }
-
-    /**
-     * Main method for running tests from command line
-     */
     public static void main(String[] args) {
         if (args.length == 0) {
             // Run all tests with default configuration
-            UnitTestRunner runner = new UnitTestRunner("com.reflectiontest.springReflectionTest", false, true, false, 1);
+            UnitTestRunner runner = new UnitTestRunner("com.reflectiontest.springReflectionTest", false, true);
             TestReport report = runner.runTests();
             System.out.println(report.getSummary());
         } else if (args.length == 1) {
             // Run tests for specific class
-            UnitTestRunner runner = new UnitTestRunner("com.reflectiontest.springReflectionTest", false, true, false, 1);
+            UnitTestRunner runner = new UnitTestRunner("com.reflectiontest.springReflectionTest", false, true);
             TestReport report = runner.runTestsForClass(args[0]);
             System.out.println(report.getSummary());
         } else if (args.length == 2) {
             // Run tests for specific method
-            UnitTestRunner runner = new UnitTestRunner("com.reflectiontest.springReflectionTest", false, true, false, 1);
+            UnitTestRunner runner = new UnitTestRunner("com.reflectiontest.springReflectionTest", false, true);
             TestReport report = runner.runTestsForMethod(args[0], args[1]);
             System.out.println(report.getSummary());
         } else {
             System.out.println("Usage: UnitTestRunner [className] [methodName]");
-        }
-    }
-    /**
-     * Helper class to handle ExecutorService resource management
-     */
-    private static class ExecutorServiceResource implements AutoCloseable {
-        private final ExecutorService executor;
-
-        public ExecutorServiceResource(int threads) {
-            this.executor = Executors.newFixedThreadPool(threads);
-        }
-
-        public ExecutorService getExecutor() {
-            return executor;
-        }
-
-        @Override
-        public void close() {
-            executor.shutdown();
-            try {
-                if (!executor.awaitTermination(60, TimeUnit.SECONDS)) {
-                    executor.shutdownNow();
-                }
-            } catch (InterruptedException e) {
-                executor.shutdownNow();
-                Thread.currentThread().interrupt();
-            }
         }
     }
 }

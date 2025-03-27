@@ -30,6 +30,16 @@ public class UserService {
     @MockDependency
     private TokenRepository tokenRepository;
 
+    public UserService() {
+        // Default no-arg constructor
+    }
+
+    public UserService(UserRepository userRepository, AuthenticationRepository authRepository, TokenRepository tokenRepository) {
+        this.userRepository = userRepository;
+        this.authRepository = authRepository;
+        this.tokenRepository = tokenRepository;
+    }
+
     @IntegrationTest
     @ExpectedResult(inputJson = "{\"username\": \"johndoe\", \"password\": \"password123\"}", expectedJson = "true")
     @ExpectedResult(inputJson = "{\"username\": \"\", \"password\": \"password123\"}", expectedJson = "false")
