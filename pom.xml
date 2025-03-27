@@ -138,6 +138,11 @@
 			<version>1.19.0</version>
 		</dependency>
 
+		<dependency>
+			<groupId>com.fasterxml.jackson.datatype</groupId>
+			<artifactId>jackson-datatype-jdk8</artifactId>
+			<version>2.16.0</version> <!-- Match your Jackson version -->
+		</dependency>
 
 	</dependencies>
 

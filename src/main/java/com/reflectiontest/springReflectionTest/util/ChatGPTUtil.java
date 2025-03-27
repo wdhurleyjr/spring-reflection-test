@@ -2,7 +2,7 @@
 
 // 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
 
-package com.reflectiontest.springReflectionTest.utility;
+package com.reflectiontest.springReflectionTest.util;
 
 import org.json.JSONArray;
 import org.json.JSONObject;

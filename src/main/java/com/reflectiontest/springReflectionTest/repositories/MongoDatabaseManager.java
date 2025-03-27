@@ -1,6 +1,5 @@
 package com.reflectiontest.springReflectionTest.repositories;
 
-import com.reflectiontest.springReflectionTest.utility.DatabaseManager;
 import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.utility.DockerImageName;
 

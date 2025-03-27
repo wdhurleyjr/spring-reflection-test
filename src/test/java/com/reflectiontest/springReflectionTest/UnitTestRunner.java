@@ -3,14 +3,13 @@ package com.reflectiontest.springReflectionTest;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.reflectiontest.springReflectionTest.annotations.ExpectedResult;
-import com.reflectiontest.springReflectionTest.annotations.IntegrationTest;
 import com.reflectiontest.springReflectionTest.annotations.MockDependency;
 import com.reflectiontest.springReflectionTest.metrics.MetricsCollector;
 import com.reflectiontest.springReflectionTest.reporting.TestReport;
 import com.reflectiontest.springReflectionTest.reporting.TestReportBuilder;
 import com.reflectiontest.springReflectionTest.reporting.TestStatus;
-import com.reflectiontest.springReflectionTest.util.DatabaseManager;
-import com.reflectiontest.springReflectionTest.util.DatabaseManagerFactory;
+import com.reflectiontest.springReflectionTest.util.BytecodeHashUtil;
+import com.reflectiontest.springReflectionTest.util.TestCaseUtil;
 import org.mockito.Mockito;
 import org.reflections.Reflections;
 import org.slf4j.Logger;
@@ -27,107 +26,67 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Enhanced Integration Test Runner that handles database and environment setup
- * for testing service classes with external dependencies.
+ * Enhanced Unit Test Runner that executes reflection-based tests with performance metrics.
+ * Supports parallel execution, reporting, and bytecode verification.
  */
-public class IntegrationTestRunner {
-    private static final Logger logger = LoggerFactory.getLogger(IntegrationTestRunner.class);
+public class UnitTestRunner {
+    private static final Logger logger = LoggerFactory.getLogger(UnitTestRunner.class);
     private static final ObjectMapper objectMapper = new ObjectMapper();
     private static final Map<Class<?>, Object> mockInstances = new HashMap<>();
     private static final String NULL_PLACEHOLDER = "__NULL__";
+    private static final int DEFAULT_THREADS = Runtime.getRuntime().availableProcessors();
 
     // Configuration properties
     private final boolean parallelExecution;
     private final boolean collectMetrics;
+    private final boolean verifyBytecodeHash;
     private final int maxThreads;
     private final String basePackage;
-    private final String databaseType;
 
     // Services
     private final MetricsCollector metricsCollector;
     private final TestReportBuilder reportBuilder;
-    private final DatabaseManager databaseManager;
 
     // Test runner constructor with default configuration
-    public IntegrationTestRunner() {
-        this(detectBasePackage(), false, true, 1, "mongodb");
+    public UnitTestRunner() {
+        this(detectBasePackage(), true, true, false, DEFAULT_THREADS);
     }
 
     // Test runner constructor with custom configuration
-    public IntegrationTestRunner(String basePackage, boolean parallelExecution, boolean collectMetrics,
-                                 int maxThreads, String databaseType) {
+    public UnitTestRunner(String basePackage, boolean parallelExecution, boolean collectMetrics,
+                          boolean verifyBytecodeHash, int maxThreads) {
         this.basePackage = basePackage;
         this.parallelExecution = parallelExecution;
         this.collectMetrics = collectMetrics;
+        this.verifyBytecodeHash = verifyBytecodeHash;
         this.maxThreads = maxThreads;
-        this.databaseType = databaseType;
 
         this.metricsCollector = new MetricsCollector();
         this.reportBuilder = new TestReportBuilder();
-        this.databaseManager = DatabaseManagerFactory.createDatabaseManager(databaseType);
 
-        logger.info("Initializing IntegrationTestRunner with: parallelExecution={}, collectMetrics={}, " +
-                        "maxThreads={}, basePackage={}, databaseType={}",
-                parallelExecution, collectMetrics, maxThreads, basePackage, databaseType);
+        logger.info("Initializing UnitTestRunner with: parallelExecution={}, collectMetrics={}, " +
+                        "verifyBytecodeHash={}, maxThreads={}, basePackage={}",
+                parallelExecution, collectMetrics, verifyBytecodeHash, maxThreads, basePackage);
     }
 
     /**
-     * Runs all integration tests in the specified package
+     * Runs all unit tests in the specified package
+     *
      * @return TestReport containing all test results
      */
     public TestReport runTests() {
-        logger.info("🔍 Starting integration test run in package: {}", basePackage);
+        logger.info("🔍 Starting test run in package: {}", basePackage);
         long startTime = System.nanoTime();
 
-        // Setup database for integration tests
-        setupDatabase();
+        Reflections reflections = new Reflections(basePackage);
+        Set<Class<?>> serviceClasses = reflections.getTypesAnnotatedWith(Service.class);
 
-        try {
-            Reflections reflections = new Reflections(basePackage);
-            Set<Class<?>> serviceClasses = reflections.getTypesAnnotatedWith(Service.class);
+        logger.info("Found {} service classes to test", serviceClasses.size());
 
-            logger.info("Found {} service classes to test", serviceClasses.size());
-
-            if (parallelExecution) {
-                return runTestsInParallel(serviceClasses);
-            } else {
-                return runTestsSequentially(serviceClasses);
-            }
-        } finally {
-            // Always cleanup the database after tests
-            cleanupDatabase();
-
-            if (collectMetrics) {
-                metricsCollector.recordTotalExecutionTime(System.nanoTime() - startTime);
-                reportBuilder.setMetrics(metricsCollector.getMetrics());
-            }
-        }
-    }
-
-    /**
-     * Sets up the database for testing
-     */
-    private void setupDatabase() {
-        logger.info("⚙️ Setting up {} database for integration tests...", databaseType);
-        try {
-            databaseManager.start();
-            logger.info("Database started successfully at: {}", databaseManager.getConnectionString());
-        } catch (Exception e) {
-            logger.error("Failed to setup database: {}", e.getMessage());
-            throw new RuntimeException("Failed to setup database for integration tests", e);
-        }
-    }
-
-    /**
-     * Cleans up the database after testing
-     */
-    private void cleanupDatabase() {
-        logger.info("🧹 Cleaning up database...");
-        try {
-            databaseManager.stop();
-            logger.info("Database stopped successfully");
-        } catch (Exception e) {
-            logger.error("Failed to cleanup database: {}", e.getMessage());
+        if (parallelExecution) {
+            return runTestsInParallel(serviceClasses);
+        } else {
+            return runTestsSequentially(serviceClasses);
         }
     }
 
@@ -135,18 +94,23 @@ public class IntegrationTestRunner {
      * Runs tests for all service classes sequentially
      */
     private TestReport runTestsSequentially(Set<Class<?>> serviceClasses) {
-        logger.info("Running integration tests sequentially");
+        logger.info("Running tests sequentially");
 
         for (Class<?> clazz : serviceClasses) {
             try {
                 Object serviceInstance = clazz.getDeclaredConstructor().newInstance();
                 injectMocks(serviceInstance);
 
-                runIntegrationTestsForClass(serviceInstance);
+                runTestsForClass(serviceInstance);
             } catch (Exception e) {
                 logger.error("Error instantiating class {}: {}", clazz.getName(), e.getMessage());
                 reportBuilder.addError(clazz.getName(), "Class initialization failed", e);
             }
+        }
+
+        if (collectMetrics) {
+            metricsCollector.recordTotalExecutionTime(System.nanoTime() - metricsCollector.getStartTime());
+            reportBuilder.setMetrics(metricsCollector.getMetrics());
         }
 
         return reportBuilder.build();
@@ -156,7 +120,7 @@ public class IntegrationTestRunner {
      * Runs tests for all service classes in parallel
      */
     private TestReport runTestsInParallel(Set<Class<?>> serviceClasses) {
-        logger.info("Running integration tests in parallel with {} threads", maxThreads);
+        logger.info("Running tests in parallel with {} threads", maxThreads);
 
         // Use try-with-resources to properly close the ExecutorService
         try (var executorResource = new ExecutorServiceResource(maxThreads)) {
@@ -170,7 +134,7 @@ public class IntegrationTestRunner {
                         Object serviceInstance = finalClass.getDeclaredConstructor().newInstance();
                         injectMocks(serviceInstance);
 
-                        runIntegrationTestsForClass(serviceInstance);
+                        runTestsForClass(serviceInstance);
                     } catch (Exception e) {
                         logger.error("Error instantiating class {}: {}", finalClass.getName(), e.getMessage());
                         reportBuilder.addError(finalClass.getName(), "Class initialization failed", e);
@@ -188,27 +152,56 @@ public class IntegrationTestRunner {
             }
         } // ExecutorService will be shutdown here automatically
 
+        if (collectMetrics) {
+            metricsCollector.recordTotalExecutionTime(System.nanoTime() - metricsCollector.getStartTime());
+            reportBuilder.setMetrics(metricsCollector.getMetrics());
+        }
+
         return reportBuilder.build();
     }
 
     /**
-     * Runs integration tests for a specific service class instance
+     * Runs tests for a specific service class instance
      */
-    private void runIntegrationTestsForClass(Object serviceInstance) {
+    private void runTestsForClass(Object serviceInstance) {
         Class<?> clazz = serviceInstance.getClass();
 
         for (Method method : clazz.getDeclaredMethods()) {
-            // Only run methods with both IntegrationTest and ExpectedResult annotations
-            if (method.isAnnotationPresent(IntegrationTest.class)) {
-                ExpectedResult[] testCases = method.getAnnotationsByType(ExpectedResult.class);
-                if (testCases.length > 0) {
-                    logger.info("Running integration tests for: {}.{}", clazz.getSimpleName(), method.getName());
+            ExpectedResult[] testCases = method.getAnnotationsByType(ExpectedResult.class);
+            if (testCases.length > 0) {
+                logger.info("Running tests for: {}.{}", clazz.getSimpleName(), method.getName());
 
-                    for (ExpectedResult testCase : testCases) {
-                        runTest(serviceInstance, method, testCase.inputJson(), testCase.expectedJson());
-                    }
+                if (verifyBytecodeHash) {
+                    verifyMethodBytecode(clazz, method);
+                }
+
+                for (ExpectedResult testCase : testCases) {
+                    runTest(serviceInstance, method, testCase.inputJson(), testCase.expectedJson());
                 }
             }
+        }
+    }
+
+    /**
+     * Verifies if method bytecode has changed compared to the stored hash
+     */
+    private void verifyMethodBytecode(Class<?> clazz, Method method) {
+        try {
+            String currentHash = BytecodeHashUtil.generateMethodHash(clazz, method);
+            String storedHash = BytecodeHashUtil.getStoredMethodHash(clazz, method);
+
+            if (storedHash != null && !currentHash.equals(storedHash)) {
+                logger.warn("⚠️ Method bytecode has changed: {}.{}",
+                        clazz.getSimpleName(), method.getName());
+                reportBuilder.addWarning(clazz.getName(), method.getName(),
+                        "Method bytecode has changed since tests were generated");
+            } else if (storedHash == null) {
+                // Store hash if it doesn't exist
+                BytecodeHashUtil.storeMethodHash(clazz, method, currentHash);
+            }
+        } catch (Exception e) {
+            logger.error("Error verifying bytecode for {}.{}: {}",
+                    clazz.getSimpleName(), method.getName(), e.getMessage());
         }
     }
 
@@ -238,6 +231,7 @@ public class IntegrationTestRunner {
      */
     private void runTest(Object serviceInstance, Method method, String inputJson, String expectedJsonValue) {
         String methodId = serviceInstance.getClass().getName() + "." + method.getName();
+        String testCaseId = TestCaseUtil.generateTestCaseId(methodId, inputJson, expectedJsonValue);
 
         try {
             // Reset mocks before each test to ensure independent executions
@@ -362,12 +356,9 @@ public class IntegrationTestRunner {
     }
 
     /**
-     * Runs integration tests for a specific service class
+     * Runs tests for a specific service class
      */
-    public TestReport runIntegrationTestsForClass(String className) {
-        logger.info("🔍 Running integration tests for class: {}", className);
-        setupDatabase();
-
+    public TestReport runTestsForClass(String className) {
         try {
             Class<?> clazz = Class.forName(className);
             if (!clazz.isAnnotationPresent(Service.class)) {
@@ -378,7 +369,7 @@ public class IntegrationTestRunner {
             Object serviceInstance = clazz.getDeclaredConstructor().newInstance();
             injectMocks(serviceInstance);
 
-            runIntegrationTestsForClass(serviceInstance);
+            runTestsForClass(serviceInstance);
 
             if (collectMetrics) {
                 reportBuilder.setMetrics(metricsCollector.getMetrics());
@@ -389,18 +380,13 @@ public class IntegrationTestRunner {
             logger.error("Error running tests for class {}: {}", className, e.getMessage());
             reportBuilder.addError(className, "Class initialization failed", e);
             return reportBuilder.build();
-        } finally {
-            cleanupDatabase();
         }
     }
 
     /**
-     * Runs integration tests for a specific method
+     * Runs tests for a specific method
      */
-    public TestReport runIntegrationTestsForMethod(String className, String methodName) {
-        logger.info("🔍 Running integration tests for method: {}.{}", className, methodName);
-        setupDatabase();
-
+    public TestReport runTestsForMethod(String className, String methodName) {
         try {
             Class<?> clazz = Class.forName(className);
             if (!clazz.isAnnotationPresent(Service.class)) {
@@ -413,20 +399,24 @@ public class IntegrationTestRunner {
 
             Method method = null;
             for (Method m : clazz.getDeclaredMethods()) {
-                if (m.getName().equals(methodName) && m.isAnnotationPresent(IntegrationTest.class)) {
+                if (m.getName().equals(methodName)) {
                     method = m;
                     break;
                 }
             }
 
             if (method == null) {
-                logger.warn("Integration test method {} not found in class {}", methodName, className);
+                logger.warn("Method {} not found in class {}", methodName, className);
                 return reportBuilder.build();
             }
 
             ExpectedResult[] testCases = method.getAnnotationsByType(ExpectedResult.class);
             if (testCases.length > 0) {
                 logger.info("Running tests for: {}.{}", clazz.getSimpleName(), method.getName());
+
+                if (verifyBytecodeHash) {
+                    verifyMethodBytecode(clazz, method);
+                }
 
                 for (ExpectedResult testCase : testCases) {
                     runTest(serviceInstance, method, testCase.inputJson(), testCase.expectedJson());
@@ -444,8 +434,6 @@ public class IntegrationTestRunner {
             logger.error("Error running tests for method {}.{}: {}", className, methodName, e.getMessage());
             reportBuilder.addError(className, methodName, "N/A", e.getMessage(), 0);
             return reportBuilder.build();
-        } finally {
-            cleanupDatabase();
         }
     }
 
@@ -455,29 +443,21 @@ public class IntegrationTestRunner {
     public static void main(String[] args) {
         if (args.length == 0) {
             // Run all tests with default configuration
-            IntegrationTestRunner runner = new IntegrationTestRunner();
+            UnitTestRunner runner = new UnitTestRunner();
             TestReport report = runner.runTests();
             System.out.println(report.getSummary());
         } else if (args.length == 1) {
             // Run tests for specific class
-            IntegrationTestRunner runner = new IntegrationTestRunner();
-            TestReport report = runner.runIntegrationTestsForClass(args[0]);
+            UnitTestRunner runner = new UnitTestRunner();
+            TestReport report = runner.runTestsForClass(args[0]);
             System.out.println(report.getSummary());
         } else if (args.length == 2) {
             // Run tests for specific method
-            IntegrationTestRunner runner = new IntegrationTestRunner();
-            TestReport report = runner.runIntegrationTestsForMethod(args[0], args[1]);
-            System.out.println(report.getSummary());
-        } else if (args.length == 3 && args[0].equals("--db")) {
-            // Run all tests with specific database type
-            IntegrationTestRunner runner = new IntegrationTestRunner(
-                    detectBasePackage(), false, true, 1, args[1]
-            );
-            TestReport report = runner.runTests();
+            UnitTestRunner runner = new UnitTestRunner();
+            TestReport report = runner.runTestsForMethod(args[0], args[1]);
             System.out.println(report.getSummary());
         } else {
-            System.out.println("Usage: IntegrationTestRunner [className] [methodName]");
-            System.out.println("   or: IntegrationTestRunner --db <database-type>");
+            System.out.println("Usage: UnitTestRunner [className] [methodName]");
         }
     }
 
@@ -509,6 +489,3 @@ public class IntegrationTestRunner {
         }
     }
 }
-
-
-

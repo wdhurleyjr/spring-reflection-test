@@ -1,4 +1,4 @@
-package com.reflectiontest.springReflectionTest.utility;
+package com.reflectiontest.springReflectionTest.util;
 
 import java.lang.reflect.Field;
 import java.util.HashMap;
