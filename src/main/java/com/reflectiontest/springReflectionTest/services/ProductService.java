@@ -1,4 +1,4 @@
-package com.reflectiontest.springReflectionTest.examples;
+package com.reflectiontest.springReflectionTest.services;
 
 import com.reflectiontest.springReflectionTest.annotations.ExpectedResult;
 import com.reflectiontest.springReflectionTest.annotations.IntegrationTest;

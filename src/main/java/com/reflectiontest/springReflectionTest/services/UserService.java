@@ -1,4 +1,4 @@
-package com.reflectiontest.springReflectionTest.examples;
+package com.reflectiontest.springReflectionTest.services;
 
 import com.reflectiontest.springReflectionTest.annotations.ExpectedResult;
 import com.reflectiontest.springReflectionTest.annotations.IntegrationTest;
@@ -10,7 +10,6 @@ import com.reflectiontest.springReflectionTest.repositories.UserRepository;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
-import java.util.stream.Collectors;
 
 /**
  * User service that demonstrates various testing scenarios

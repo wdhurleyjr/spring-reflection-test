@@ -1,6 +1,6 @@
 package com.reflectiontest.springReflectionTest;
 
-import com.reflectiontest.springReflectionTest.examples.UserService;
+import com.reflectiontest.springReflectionTest.services.UserService;
 import com.reflectiontest.springReflectionTest.models.User;
 import com.reflectiontest.springReflectionTest.repositories.AuthenticationRepository;
 import com.reflectiontest.springReflectionTest.repositories.TokenRepository;

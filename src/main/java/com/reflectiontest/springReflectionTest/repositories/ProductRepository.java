@@ -1,58 +1,48 @@
 package com.reflectiontest.springReflectionTest.repositories;
 
-import com.reflectiontest.springReflectionTest.annotations.MockReturn;
-import com.reflectiontest.springReflectionTest.annotations.MockReturns;
 import com.reflectiontest.springReflectionTest.models.Product;
+import org.springframework.data.mongodb.repository.MongoRepository;
+import org.springframework.data.mongodb.repository.Query;
+import org.springframework.stereotype.Repository;
+
+import java.util.List;
 import java.util.Optional;
 
-/**
- * Repository for Product data with mock return annotations
- */
-public interface ProductRepository {
+@Repository
+public interface ProductRepository extends MongoRepository<Product, String> {
     /**
-     * Checks if a product exists by name
+     * Find a product by name
      */
-    @MockReturns({
-            @MockReturn(inputJson = "\"Laptop\"", returnJson = "true"),
-            @MockReturn(inputJson = "\"Mouse\"", returnJson = "true"),
-            @MockReturn(inputJson = "\"NonExistentProduct\"", returnJson = "false", isDefault = true)
-    })
-    boolean existsByName(String name);
-
-    /**
-     * Finds a product by name
-     */
-    @MockReturns({
-            @MockReturn(inputJson = "\"Laptop\"",
-                    returnJson = "{\"name\":\"Laptop\",\"price\":1200.00}",
-                    isDefault = false),
-            @MockReturn(inputJson = "\"Mouse\"",
-                    returnJson = "{\"name\":\"Mouse\",\"price\":25.00}",
-                    isDefault = false),
-            @MockReturn(inputJson = "\"NonExistentProduct\"",
-                    returnJson = "null",
-                    isDefault = true)
-    })
     Optional<Product> findByName(String name);
 
     /**
-     * Saves a product
+     * Check if a product exists by name
      */
-    @MockReturns({
-            @MockReturn(inputJson = "{\"name\":\"Laptop\",\"price\":1200.00}",
-                    returnJson = "{\"name\":\"Laptop\",\"price\":1200.00}"),
-            @MockReturn(inputJson = "{\"name\":\"Mouse\",\"price\":25.00}",
-                    returnJson = "{\"name\":\"Mouse\",\"price\":25.00}")
-    })
-    Product save(Product product);
+    boolean existsByName(String name);
 
     /**
-     * Deletes a product by name
+     * Find products with price less than a given value
      */
-    @MockReturns({
-            @MockReturn(inputJson = "\"Laptop\"", returnJson = ""),
-            @MockReturn(inputJson = "\"Mouse\"", returnJson = "")
-    })
+    List<Product> findByPriceLessThan(double price);
+
+    /**
+     * Find products with price greater than a given value
+     */
+    List<Product> findByPriceGreaterThan(double price);
+
+    /**
+     * Find products within a price range
+     */
+    List<Product> findByPriceBetween(double minPrice, double maxPrice);
+
+    /**
+     * Custom query to find products with name containing a specific string
+     */
+    @Query("{'name': {$regex: ?0, $options: 'i'}}")
+    List<Product> findProductsByNamePattern(String namePattern);
+
+    /**
+     * Delete a product by name
+     */
     void deleteByName(String name);
 }
-

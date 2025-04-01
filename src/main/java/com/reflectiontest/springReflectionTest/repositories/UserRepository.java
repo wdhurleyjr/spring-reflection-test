@@ -1,39 +1,43 @@
 package com.reflectiontest.springReflectionTest.repositories;
 
-import com.reflectiontest.springReflectionTest.annotations.MockReturn;
-import com.reflectiontest.springReflectionTest.annotations.MockReturns;
 import com.reflectiontest.springReflectionTest.models.User;
+import org.springframework.data.mongodb.repository.MongoRepository;
+import org.springframework.data.mongodb.repository.Query;
+import org.springframework.stereotype.Repository;
+
+import java.util.List;
 import java.util.Optional;
 
-public interface UserRepository {
-    @MockReturns({
-            @MockReturn(inputJson = "\"johndoe\"", returnJson = "true"),
-            @MockReturn(inputJson = "\"admin\"", returnJson = "true"),
-            @MockReturn(inputJson = "\"newuser\"", returnJson = "false", isDefault = true)
-    })
-    boolean existsByUsername(String username);
-
-    @MockReturns({
-            @MockReturn(inputJson = "\"johndoe\"",
-                    returnJson = "{\"username\":\"johndoe\",\"email\":\"johndoe@example.com\",\"role\":\"user\"}",
-                    isDefault = false),
-            @MockReturn(inputJson = "\"admin\"",
-                    returnJson = "{\"username\":\"admin\",\"email\":\"admin@system.com\",\"role\":\"admin\"}",
-                    isDefault = false),
-            @MockReturn(inputJson = "",
-                    returnJson = "null",
-                    isDefault = true)
-    })
+@Repository
+public interface UserRepository extends MongoRepository<User, String> {
+    /**
+     * Find a user by username
+     */
     Optional<User> findByUsername(String username);
 
-    @MockReturns({
-            @MockReturn(inputJson = "{\"username\":\"johndoe\",\"email\":\"johndoe@example.com\",\"password\":\"password123\",\"role\":\"user\"}",
-                    returnJson = "{\"username\":\"johndoe\",\"email\":\"johndoe@example.com\",\"password\":\"password123\",\"role\":\"user\"}")
-    })
-    User save(User user);
+    /**
+     * Check if a user exists by username
+     */
+    boolean existsByUsername(String username);
 
-    @MockReturns({
-            @MockReturn(inputJson = "\"johndoe\"", returnJson = "")
-    })
+    /**
+     * Find users by role
+     */
+    List<User> findByRole(String role);
+
+    /**
+     * Find users with email matching a pattern
+     */
+    List<User> findByEmailContaining(String emailDomain);
+
+    /**
+     * Custom query to find users with a specific role and email domain
+     */
+    @Query("{'role': ?0, 'email': {$regex: ?1}}")
+    List<User> findUsersByRoleAndEmailDomain(String role, String emailDomain);
+
+    /**
+     * Delete a user by username
+     */
     void deleteByUsername(String username);
 }

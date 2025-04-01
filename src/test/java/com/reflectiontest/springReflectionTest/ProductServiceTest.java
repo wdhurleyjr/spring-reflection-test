@@ -1,6 +1,6 @@
 package com.reflectiontest.springReflectionTest;
 
-import com.reflectiontest.springReflectionTest.examples.ProductService;
+import com.reflectiontest.springReflectionTest.services.ProductService;
 import com.reflectiontest.springReflectionTest.models.Product;
 import com.reflectiontest.springReflectionTest.repositories.ProductRepository;
 import com.reflectiontest.springReflectionTest.repositories.SearchHistoryRepository;
