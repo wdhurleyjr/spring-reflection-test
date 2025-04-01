@@ -1,108 +1,118 @@
 package com.reflectiontest.springReflectionTest;
 
-import com.reflectiontest.springReflectionTest.services.UserService;
 import com.reflectiontest.springReflectionTest.models.User;
-import com.reflectiontest.springReflectionTest.repositories.AuthenticationRepository;
-import com.reflectiontest.springReflectionTest.repositories.TokenRepository;
 import com.reflectiontest.springReflectionTest.repositories.UserRepository;
+import com.reflectiontest.springReflectionTest.services.UserService;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.jupiter.MockitoExtension;
 
-import java.util.*;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
+@ExtendWith(MockitoExtension.class)
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 public class UserServiceTest {
 
     @Mock
     private UserRepository userRepository;
 
-    @Mock
-    private AuthenticationRepository authRepository;
-
-    @Mock
-    private TokenRepository tokenRepository;
-
+    @InjectMocks
     private UserService userService;
+
+    private User johndoe;
+    private User janedoe;
+    private User adminUser;
 
     @BeforeEach
     void setUp() {
-        MockitoAnnotations.openMocks(this);
-        userService = new UserService(userRepository, authRepository, tokenRepository);
+        johndoe = new User("johndoe", "johndoe@example.com", "password123", "USER");
+        janedoe = new User("janedoe", "janedoe@example.com", "password456", "USER");
+        adminUser = new User("admin", "admin@system.com", "adminpass", "ADMIN");
     }
 
     @Test
     @Order(1)
     void testRegisterUser() {
-        User user = new User("johndoe", "johndoe@example.com", "password123", "USER");
+        // Scenario 1: Valid user registration
         when(userRepository.existsByUsername("johndoe")).thenReturn(false);
+        assertTrue(userService.registerUser(johndoe));
 
-        assertTrue(userService.registerUser(user));
-        assertFalse(userService.registerUser(new User("", "user@example.com", "password123", "USER")));
-        assertFalse(userService.registerUser(new User("johndoe", "user@example.com", "", "USER")));
-        assertFalse(userService.registerUser(new User("admin", "admin@example.com", "admin", "ADMIN")));
-        assertFalse(userService.registerUser(new User(null, "user@example.com", "password123", "USER")));
+        // Scenario 2: Empty username
+        assertFalse(userService.registerUser(new User("", "test@example.com", "password123", "USER")));
+
+        // Scenario 3: Empty password
+        assertFalse(userService.registerUser(new User("testuser", "test@example.com", "", "USER")));
+
+        // Scenario 4: Admin username not allowed
+        assertFalse(userService.registerUser(new User("admin", "admin@example.com", "adminpass", "ADMIN")));
+
+        // Scenario 5: Null user
+        assertFalse(userService.registerUser(null));
+
+        // Scenario 6: Invalid email
+        assertFalse(userService.registerUser(new User("testuser", "invalid-email", "password123", "USER")));
     }
 
     @Test
     @Order(2)
-    void testAuthenticateUser() {
-        User validUser = new User("johndoe", "johndoe@example.com", "password123", "USER");
-        when(userRepository.findByUsername("johndoe")).thenReturn(Optional.of(validUser));
-        when(authRepository.isAccountLocked("johndoe")).thenReturn(false);
+    void testCountUsersByRole() {
+        // Scenario 1: Users with specific role
+        when(userRepository.findByRole("USER")).thenReturn(Arrays.asList(johndoe, janedoe));
+        assertEquals(2, userService.countUsersByRole("USER"));
 
-        Map<String, Object> success = userService.authenticateUser(validUser, "192.168.1.1");
-        assertTrue((Boolean) success.get("success"));
-        assertEquals("Login successful", success.get("message"));
-
-        User wrongPassword = new User("johndoe", "johndoe@example.com", "wrongpassword", "USER");
-        Map<String, Object> fail1 = userService.authenticateUser(wrongPassword, "192.168.1.1");
-        assertFalse((Boolean) fail1.get("success"));
-
-        when(userRepository.findByUsername("doesnotexist")).thenReturn(Optional.empty());
-        Map<String, Object> fail2 = userService.authenticateUser(new User("doesnotexist", "na@example.com", "password123", "USER"), "192.168.1.1");
-        assertFalse((Boolean) fail2.get("success"));
-
-        when(authRepository.isAccountLocked("lockedUser")).thenReturn(true);
-        Map<String, Object> fail3 = userService.authenticateUser(new User("lockedUser", "locked@example.com", "password123", "USER"), "192.168.1.1");
-        assertEquals("Account is locked due to too many failed attempts", fail3.get("message"));
+        // Scenario 2: No users with role
+        when(userRepository.findByRole("ADMIN")).thenReturn(Collections.emptyList());
+        assertEquals(0, userService.countUsersByRole("ADMIN"));
     }
 
     @Test
     @Order(3)
-    void testChangePassword() {
-        User user = new User("johndoe", "johndoe@example.com", "password123", "USER");
-        when(userRepository.findByUsername("johndoe")).thenReturn(Optional.of(user));
+    void testCountUsersByEmailDomain() {
+        // Scenario 1: Users with specific email domain
+        when(userRepository.findByEmailContaining("example.com"))
+                .thenReturn(Arrays.asList(johndoe, janedoe));
+        assertEquals(2, userService.countUsersByEmailDomain("example.com"));
 
-        assertTrue(userService.changePassword("johndoe", "password123", "newpassword456"));
-        assertFalse(userService.changePassword("johndoe", "wrongpassword", "newpassword456"));
-        assertFalse(userService.changePassword("johndoe", "password123", "weak"));
-        when(userRepository.findByUsername("doesnotexist")).thenReturn(Optional.empty());
-        assertFalse(userService.changePassword("doesnotexist", "password123", "newpassword456"));
+        // Scenario 2: No users with email domain
+        when(userRepository.findByEmailContaining("test.com"))
+                .thenReturn(Collections.emptyList());
+        assertEquals(0, userService.countUsersByEmailDomain("test.com"));
     }
 
     @Test
     @Order(4)
-    void testIsUserRegistered() {
-        when(userRepository.existsByUsername("johndoe")).thenReturn(true);
-        assertTrue(userService.isUserRegistered("johndoe"));
-        when(userRepository.existsByUsername("doesnotexist")).thenReturn(false);
-        assertFalse(userService.isUserRegistered("doesnotexist"));
-        assertFalse(userService.isUserRegistered(null));
+    void testCountUsersByRoleAndEmailDomain() {
+        // Scenario 1: Users matching role and email domain
+        when(userRepository.findUsersByRoleAndEmailDomain("USER", ".*example\\.com"))
+                .thenReturn(Arrays.asList(johndoe, janedoe));
+        assertEquals(2, userService.countUsersByRoleAndEmailDomain("USER", "example.com"));
+
+        // Scenario 2: No users matching
+        when(userRepository.findUsersByRoleAndEmailDomain("ADMIN", ".*admin\\.com"))
+                .thenReturn(Collections.emptyList());
+        assertEquals(0, userService.countUsersByRoleAndEmailDomain("ADMIN", "admin.com"));
     }
 
     @Test
     @Order(5)
     void testIsPasswordStrong() {
+        // Strong password scenarios
         assertTrue(userService.isPasswordStrong("StrongPass1!"));
+        assertTrue(userService.isPasswordStrong("aB1!aB1!aB1!aB1!aB1!"));
+
+        // Weak password scenarios
         assertFalse(userService.isPasswordStrong("weakpass"));
         assertFalse(userService.isPasswordStrong("12345678"));
         assertFalse(userService.isPasswordStrong("NoSpecial123"));
         assertFalse(userService.isPasswordStrong("!@#$%^&*()"));
-        assertTrue(userService.isPasswordStrong("aB1!aB1!aB1!aB1!aB1!"));
         assertFalse(userService.isPasswordStrong(""));
         assertFalse(userService.isPasswordStrong(null));
     }
@@ -110,66 +120,40 @@ public class UserServiceTest {
     @Test
     @Order(6)
     void testAnalyzeUsernames() {
+        // Scenario 1: Mixed existing and new usernames
         when(userRepository.existsByUsername("johndoe")).thenReturn(true);
         when(userRepository.existsByUsername("janedoe")).thenReturn(false);
         when(userRepository.existsByUsername("bobsmith")).thenReturn(false);
 
-        Map<String, Integer> result = userService.analyzeUsernames(List.of("johndoe", "janedoe", "bobsmith"));
+        List<String> usernames = Arrays.asList("johndoe", "janedoe", "bobsmith");
+        Map<String, Object> result = userService.analyzeUsernames(usernames);
+
         assertEquals(3, result.get("total"));
         assertEquals(1, result.get("existing"));
         assertEquals(2, result.get("new"));
+        assertEquals(Collections.singletonList("johndoe"), result.get("existingUsernames"));
+
+        // Scenario 2: Empty list
+        result = userService.analyzeUsernames(Collections.emptyList());
+        assertEquals(0, result.get("total"));
+        assertEquals(0, result.get("existing"));
+        assertEquals(0, result.get("new"));
+        assertTrue(((List<?>) result.get("existingUsernames")).isEmpty());
     }
 
     @Test
     @Order(7)
-    void testGetUserEmail() {
-        when(userRepository.findByUsername("johndoe"))
-                .thenReturn(Optional.of(new User("johndoe", "johndoe@example.com", "pass", "USER")));
-        assertEquals("johndoe@example.com", userService.getUserEmail("johndoe"));
+    void testCountTotalUsers() {
+        // Scenario 1: Multiple users
+        List<User> allUsers = Arrays.asList(johndoe, janedoe, adminUser);
+        when(userRepository.findAll()).thenReturn(allUsers);
 
-        when(userRepository.findByUsername("doesnotexist")).thenReturn(Optional.empty());
-        assertThrows(NoSuchElementException.class, () -> userService.getUserEmail("doesnotexist"));
-        assertThrows(IllegalArgumentException.class, () -> userService.getUserEmail(null));
-    }
+        assertEquals(3, userService.countTotalUsers(3));
 
-    @Test
-    @Order(8)
-    void testGetUserInfo() {
-        User user = new User("johndoe", "johndoe@example.com", "password123", "USER");
-        when(userRepository.findByUsername("johndoe")).thenReturn(Optional.of(user));
+        // Scenario 2: Limit less than total users
+        assertEquals(2, userService.countTotalUsers(2));
 
-        Optional<Map<String, String>> info = userService.getUserInfo("johndoe");
-        assertTrue(info.isPresent());
-        assertEquals("johndoe", info.get().get("username"));
-        assertEquals("masked", info.get().get("password"));
-
-        when(userRepository.findByUsername("unknown")).thenReturn(Optional.empty());
-        assertFalse(userService.getUserInfo("unknown").isPresent());
-        assertFalse(userService.getUserInfo(null).isPresent());
-    }
-
-    @Test
-    @Order(9)
-    void testGeneratePasswordResetToken() {
-        when(userRepository.existsByUsername("johndoe")).thenReturn(true);
-        when(tokenRepository.generateResetToken("johndoe")).thenReturn("token123");
-
-        assertEquals("token123", userService.generatePasswordResetToken("johndoe"));
-        when(userRepository.existsByUsername("unknown")).thenReturn(false);
-        assertThrows(IllegalArgumentException.class, () -> userService.generatePasswordResetToken("unknown"));
-    }
-
-    @Test
-    @Order(10)
-    void testResetPassword() {
-        User user = new User("johndoe", "johndoe@example.com", "oldpass", "USER");
-        when(userRepository.findByUsername("johndoe")).thenReturn(Optional.of(user));
-        when(tokenRepository.validateResetToken("johndoe", "token123")).thenReturn(true);
-        assertTrue(userService.resetPassword("johndoe", "token123", "newSecurePass1!"));
-
-        when(tokenRepository.validateResetToken("johndoe", "wrongtoken")).thenReturn(false);
-        assertFalse(userService.resetPassword("johndoe", "wrongtoken", "newSecurePass1!"));
-
-        assertFalse(userService.resetPassword("johndoe", "token123", "weak"));
+        // Scenario 3: Zero limit
+        assertEquals(0, userService.countTotalUsers(0));
     }
 }
