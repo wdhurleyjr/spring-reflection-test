@@ -2,6 +2,8 @@ package com.reflectiontest.springReflectionTest.services;
 
 import com.reflectiontest.springReflectionTest.annotations.ExpectedResult;
 import com.reflectiontest.springReflectionTest.annotations.IntegrationTest;
+import com.reflectiontest.springReflectionTest.annotations.TestObject;
+import com.reflectiontest.springReflectionTest.annotations.TestObjectCreation;
 import com.reflectiontest.springReflectionTest.models.Product;
 import com.reflectiontest.springReflectionTest.repositories.ProductRepository;
 import org.springframework.stereotype.Service;
@@ -15,6 +17,56 @@ import java.util.stream.Collectors;
 public class ProductService {
     private final ProductRepository productRepository;
 
+    @TestObjectCreation(
+            objects = {
+                    @TestObject(
+                            name = "laptop",
+                            type = Product.class,
+                            json = "{\"name\": \"Laptop\", \"price\": 1200.00}",
+                            isPrimary = true
+                    ),
+                    @TestObject(
+                            name = "mouse",
+                            type = Product.class,
+                            json = "{\"name\": \"Mouse\", \"price\": 25.00}"
+                    ),
+                    @TestObject(
+                            name = "keyboard",
+                            type = Product.class,
+                            json = "{\"name\": \"Keyboard\", \"price\": 50.00}"
+                    ),
+                    @TestObject(
+                            name = "monitor",
+                            type = Product.class,
+                            json = "{\"name\": \"Monitor\", \"price\": 300.00}"
+                    ),
+                    @TestObject(
+                            name = "headphones",
+                            type = Product.class,
+                            json = "{\"name\": \"Headphones\", \"price\": 150.00}"
+                    ),
+                    @TestObject(
+                            name = "webcam",
+                            type = Product.class,
+                            json = "{\"name\": \"Webcam\", \"price\": 75.00}"
+                    ),
+                    @TestObject(
+                            name = "deleteTest",
+                            type = Product.class,
+                            json = "{\"name\": \"DeleteTest\", \"price\": 99.99}"
+                    ),
+                    @TestObject(
+                            name = "rangeTest",
+                            type = Product.class,
+                            json = "{\"name\": \"RangeTest\", \"price\": 75.00}"
+                    ),
+                    @TestObject(
+                            name = "outOfRangeTest",
+                            type = Product.class,
+                            json = "{\"name\": \"OutOfRangeTest\", \"price\": 200.00}"
+                    )
+            }
+    )
     public ProductService(ProductRepository productRepository) {
         this.productRepository = productRepository;
     }

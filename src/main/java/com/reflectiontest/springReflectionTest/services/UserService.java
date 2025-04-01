@@ -2,6 +2,8 @@ package com.reflectiontest.springReflectionTest.services;
 
 import com.reflectiontest.springReflectionTest.annotations.ExpectedResult;
 import com.reflectiontest.springReflectionTest.annotations.IntegrationTest;
+import com.reflectiontest.springReflectionTest.annotations.TestObject;
+import com.reflectiontest.springReflectionTest.annotations.TestObjectCreation;
 import com.reflectiontest.springReflectionTest.models.User;
 import com.reflectiontest.springReflectionTest.repositories.UserRepository;
 import org.springframework.stereotype.Service;
@@ -14,6 +16,46 @@ import java.util.stream.Collectors;
 public class UserService {
     private final UserRepository userRepository;
 
+    @TestObjectCreation(
+            objects = {
+                    @TestObject(
+                            name = "johndoe",
+                            type = User.class,
+                            json = "{\"username\": \"johndoe\", \"email\": \"johndoe@example.com\", \"password\": \"password123\", \"role\": \"USER\"}",
+                            isPrimary = true
+                    ),
+                    @TestObject(
+                            name = "janedoe",
+                            type = User.class,
+                            json = "{\"username\": \"janedoe\", \"email\": \"janedoe@example.com\", \"password\": \"password456\", \"role\": \"USER\"}"
+                    ),
+                    @TestObject(
+                            name = "admin",
+                            type = User.class,
+                            json = "{\"username\": \"admin\", \"email\": \"admin@system.com\", \"password\": \"adminpass\", \"role\": \"ADMIN\"}"
+                    ),
+                    @TestObject(
+                            name = "emptyUsername",
+                            type = User.class,
+                            json = "{\"username\": \"\", \"email\": \"user@example.com\", \"password\": \"password123\", \"role\": \"USER\"}"
+                    ),
+                    @TestObject(
+                            name = "emptyPassword",
+                            type = User.class,
+                            json = "{\"username\": \"johndoe\", \"email\": \"user@example.com\", \"password\": \"\", \"role\": \"USER\"}"
+                    ),
+                    @TestObject(
+                            name = "invalidEmail",
+                            type = User.class,
+                            json = "{\"username\": \"testuser\", \"email\": \"invalid-email\", \"password\": \"password123\", \"role\": \"USER\"}"
+                    ),
+                    @TestObject(
+                            name = "nullUsername",
+                            type = User.class,
+                            json = "{\"username\": null, \"email\": \"user@example.com\", \"password\": \"password123\", \"role\": \"USER\"}"
+                    )
+            }
+    )
     public UserService(UserRepository userRepository) {
         this.userRepository = userRepository;
     }

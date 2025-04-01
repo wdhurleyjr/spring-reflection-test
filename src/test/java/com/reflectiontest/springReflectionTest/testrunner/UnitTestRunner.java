@@ -2,6 +2,7 @@ package com.reflectiontest.springReflectionTest.testrunner;
 
 import com.reflectiontest.springReflectionTest.annotations.ExpectedResult;
 import com.reflectiontest.springReflectionTest.annotations.IntegrationTest;
+import com.reflectiontest.springReflectionTest.annotations.TestObjectCreation;
 import com.reflectiontest.springReflectionTest.reporting.TestReport;
 import com.reflectiontest.springReflectionTest.testrunner.config.TestRunnerConfiguration;
 import com.reflectiontest.springReflectionTest.testrunner.core.*;
@@ -14,14 +15,17 @@ import org.springframework.stereotype.Service;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Central unit test runner that coordinates test execution
  */
 public class UnitTestRunner {
     private static final Logger logger = LoggerFactory.getLogger(UnitTestRunner.class);
+    private static final Pattern TEST_OBJECT_REFERENCE_PATTERN = Pattern.compile("\\$\\{([^}]+)\\}");
 
     // Core components
     private final MockConfigurationManager mockManager;
@@ -100,9 +104,13 @@ public class UnitTestRunner {
      * @return Service instance
      */
     private Object createServiceInstance(Class<?> clazz) throws Exception {
-        // Try constructor injection first
+        Object serviceInstance = null;
+
+        // Try constructor injection with annotation detection
         for (Constructor<?> constructor : clazz.getDeclaredConstructors()) {
             Class<?>[] paramTypes = constructor.getParameterTypes();
+
+            // Check if we can handle this constructor
             if (paramTypes.length > 0) {
                 Object[] args = new Object[paramTypes.length];
                 boolean canInject = true;
@@ -118,15 +126,27 @@ public class UnitTestRunner {
 
                 if (canInject) {
                     constructor.setAccessible(true);
-                    return constructor.newInstance(args);
+                    serviceInstance = constructor.newInstance(args);
+
+                    // Process TestObjectCreation annotation if present
+                    if (constructor.isAnnotationPresent(TestObjectCreation.class)) {
+                        logger.info("Found TestObjectCreation annotation on {}", clazz.getSimpleName());
+                    }
+
+                    break;
                 }
             }
         }
 
-        // Fallback to default constructor and field injection
-        Object instance = clazz.getDeclaredConstructor().newInstance();
-        mockManager.injectMocksIntoInstance(instance);
-        return instance;
+        // Fallback to default constructor if no suitable constructor found
+        if (serviceInstance == null) {
+            serviceInstance = clazz.getDeclaredConstructor().newInstance();
+        }
+
+        // Inject mocks into instance (this also processes TestObjectCreation annotation)
+        mockManager.injectMocksIntoInstance(serviceInstance);
+
+        return serviceInstance;
     }
 
     /**
@@ -167,11 +187,14 @@ public class UnitTestRunner {
         long startTime = System.nanoTime();
 
         try {
+            // Process input JSON for test object references
+            String processedInputJson = processTestObjectReferences(testCase.inputJson());
+
             // Prepare method parameters
             Class<?>[] paramTypes = method.getParameterTypes();
             Object[] methodParams = paramTypes.length == 1
-                    ? new Object[]{ inputParser.parseInput(testCase.inputJson(), paramTypes[0]) }
-                    : inputParser.parseMultipleInputs(testCase.inputJson(), paramTypes);
+                    ? new Object[]{ inputParser.parseInput(processedInputJson, paramTypes[0]) }
+                    : inputParser.parseMultipleInputs(processedInputJson, paramTypes);
 
             // Invoke method
             Object actualOutput = method.invoke(serviceInstance, methodParams);
@@ -191,8 +214,11 @@ public class UnitTestRunner {
                 return;
             }
 
+            // Process expected output for test object references
+            String processedExpectedJson = processTestObjectReferences(testCase.expectedJson());
+
             // Parse expected output
-            Object expectedOutput = inputParser.parseInput(testCase.expectedJson(), method.getReturnType());
+            Object expectedOutput = inputParser.parseInput(processedExpectedJson, method.getReturnType());
 
             // Convert to JSON for comparison
             String expectedJson = expectedOutput == null ? "null" :
@@ -250,6 +276,43 @@ public class UnitTestRunner {
                 );
             }
         }
+    }
+
+    /**
+     * Process test object references in input or expected JSON
+     * Replaces ${objectName} with the actual test object JSON
+     */
+    private String processTestObjectReferences(String json) {
+        if (json == null || json.isEmpty() || !json.contains("${")) {
+            return json;
+        }
+
+        StringBuffer result = new StringBuffer();
+        Matcher matcher = TEST_OBJECT_REFERENCE_PATTERN.matcher(json);
+
+        while (matcher.find()) {
+            String objectName = matcher.group(1);
+            Object testObject = mockManager.getTestObject(objectName);
+
+            if (testObject != null) {
+                try {
+                    // Convert the test object to JSON
+                    String replacement = inputParser.createObjectMapper().writeValueAsString(testObject);
+                    matcher.appendReplacement(result, Matcher.quoteReplacement(replacement));
+                } catch (Exception e) {
+                    logger.warn("Failed to convert test object {} to JSON: {}", objectName, e.getMessage());
+                    // Use the original reference if conversion fails
+                    matcher.appendReplacement(result, Matcher.quoteReplacement(matcher.group(0)));
+                }
+            } else {
+                logger.warn("Test object reference not found: {}", objectName);
+                // Keep the original reference if object not found
+                matcher.appendReplacement(result, Matcher.quoteReplacement(matcher.group(0)));
+            }
+        }
+
+        matcher.appendTail(result);
+        return result.toString();
     }
 
     /**
